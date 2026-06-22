@@ -216,19 +216,28 @@ async function processReview({ octokit, owner, repo, pull_number, key, reviewer 
   }
 
   console.log(`[${key}] review posted`);
+  await clearReviewRequest(octokit, { owner, repo, pull_number, key }, reviewer);
+}
 
-  // Clear the pending review request. The App comments as itself, which never
-  // satisfies the request, so the bot reviewer would otherwise sit in "awaiting
-  // review" forever. Best-effort — only reached on a successful post.
+/**
+ * Remove the bot from the PR's requested reviewers so it doesn't sit in "awaiting
+ * review" — the App comments as itself, which never satisfies the request.
+ * Best-effort: failures are logged, not thrown.
+ */
+async function clearReviewRequest(
+  octokit: Octokit,
+  ref: { owner: string; repo: string; pull_number: number; key: string },
+  reviewer: string,
+): Promise<void> {
   try {
     await octokit.rest.pulls.removeRequestedReviewers({
-      owner,
-      repo,
-      pull_number,
+      owner: ref.owner,
+      repo: ref.repo,
+      pull_number: ref.pull_number,
       reviewers: [reviewer],
     });
   } catch (err) {
-    console.warn(`[${key}] could not clear review request for ${reviewer}:`, err);
+    console.warn(`[${ref.key}] could not clear review request for ${reviewer}:`, err);
   }
 }
 
@@ -251,6 +260,9 @@ ghApp.webhooks.on("pull_request.review_requested", async ({ octokit, payload }) 
   // any await) also dedupes GitHub's redelivery of webhooks we don't ack in time.
   if (reviewedHeads.has(key)) {
     console.log(`[${key}] already reviewed; skipping`);
+    // The review already exists — still clear the re-request so the bot doesn't
+    // get stuck "awaiting review" for this commit. Fire-and-forget.
+    void clearReviewRequest(octokit, { owner, repo, pull_number, key }, requested);
     return;
   }
   reviewedHeads.add(key);
