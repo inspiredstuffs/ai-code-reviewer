@@ -105,6 +105,24 @@ function stripFences(s: string): string {
   return s.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
 }
 
+/** A short PR note shown when a review couldn't be completed, so the requester
+ *  isn't left in limbo and knows to re-request. */
+function failureNotice(err: unknown): string {
+  const detail = (err instanceof Error ? err.message : String(err)).slice(0, 500);
+  return [
+    "🤖 **Claude review failed** — I couldn't complete this review.",
+    "",
+    "Please re-request a review (the ↻ icon next to the reviewer) to try again.",
+    "",
+    "<details><summary>Error detail</summary>",
+    "",
+    "```",
+    detail,
+    "```",
+    "</details>",
+  ].join("\n");
+}
+
 /**
  * Run `claude -p` headlessly, feeding the prompt on stdin (NOT as an argv — a diff
  * can exceed the OS argument-length limit) and resolving with its stdout. Uses
@@ -226,10 +244,23 @@ ghApp.webhooks.on("pull_request.review_requested", async ({ octokit, payload }) 
   // inside GitHub's ~10s window. The work runs in the background, one review at a time.
   void queue
     .add(() => processReview({ octokit, owner, repo, pull_number, key }))
-    .catch((err) => {
+    .catch(async (err) => {
       // Release the key so a later re-request can retry this exact head SHA.
       reviewedHeads.delete(key);
       console.error(`[${key}] review failed:`, err);
+      // Don't leave the PR in limbo — post a short note so the requester knows it
+      // failed and can re-request. Best-effort; ignore errors posting it.
+      try {
+        await octokit.rest.pulls.createReview({
+          owner,
+          repo,
+          pull_number,
+          event: "COMMENT",
+          body: failureNotice(err),
+        });
+      } catch (postErr) {
+        console.error(`[${key}] could not post failure notice:`, postErr);
+      }
     });
 });
 
