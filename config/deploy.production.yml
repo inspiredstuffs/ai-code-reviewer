@@ -22,3 +22,13 @@ proxy:
   healthcheck:
     path: /health
     interval: 5
+
+# Build on the amd64 server itself (native — no QEMU emulation) and push to ghcr
+# from its datacenter link. Local cross-builds from an arm64 Mac were slow and the
+# push from a home uplink hit ghcr's registry deadline.
+builder:
+  remote: ssh://<%= ENV.fetch('SSH_USER', 'deploy') %>@<%= web_hosts.first %>
+  # ghcr rejected the multi-manifest index buildx pushes by default; drop the
+  # provenance/SBOM attestations so a single, reliable manifest is pushed.
+  provenance: false
+  sbom: false
