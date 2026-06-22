@@ -183,7 +183,9 @@ ghApp.webhooks.on("pull_request.review_requested", async ({ octokit, payload }) 
   // (Team requests carry `requested_team` instead and are ignored here.)
   const requested =
     "requested_reviewer" in payload ? payload.requested_reviewer?.login : undefined;
-  if (requested !== REVIEWER_LOGIN) return;
+  // Case-insensitive: GitHub logins ignore case, and a casing mismatch here would
+  // silently no-op with no log line — the exact failure mode we hit during setup.
+  if (!REVIEWER_LOGIN || requested?.toLowerCase() !== REVIEWER_LOGIN.toLowerCase()) return;
 
   const owner = payload.repository.owner.login;
   const repo = payload.repository.name;
