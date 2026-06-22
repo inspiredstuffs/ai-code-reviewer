@@ -1,0 +1,48 @@
+# Production image for the Claude PR Reviewer webhook service.
+#
+# Runs the app under tsx (no separate build step) and bundles the Claude Code CLI
+# so the service can shell out to `claude` at runtime. Auth is supplied at runtime
+# via CLAUDE_CODE_OAUTH_TOKEN — it is never baked into the image, and
+# ANTHROPIC_API_KEY is never set (it would override the subscription token).
+
+FROM node:22-slim
+
+# Claude Code CLI, installed globally as root before we drop privileges.
+# curl is only needed for the container HEALTHCHECK below.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends curl \
+  && rm -rf /var/lib/apt/lists/* \
+  && npm install -g @anthropic-ai/claude-code
+
+WORKDIR /app
+
+# Production dependencies only, as a cached layer keyed on the lockfile.
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+
+# Application source (single entrypoint — no build artifacts to copy).
+COPY server.ts ./
+
+ENV NODE_ENV=production \
+    PORT=3000 \
+    HOME=/home/node \
+    # Keep `claude -p` headless and offline-friendly: no autoupdate, telemetry, or error reporting.
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+
+# Pre-seed Claude Code state so `claude -p` runs fully headless: skips first-run
+# onboarding and the per-folder "do you trust this directory?" prompt for /app.
+# Key names verified against a real ~/.claude.json. No auth lives here — the token
+# is injected at runtime via CLAUDE_CODE_OAUTH_TOKEN.
+RUN printf '%s' \
+    '{"hasCompletedOnboarding":true,"projects":{"/app":{"hasTrustDialogAccepted":true,"hasCompletedProjectOnboarding":true}}}' \
+    > /home/node/.claude.json \
+  && chown -R node:node /app /home/node
+
+USER node
+
+EXPOSE 3000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD curl -fsS http://localhost:3000/health || exit 1
+
+CMD ["npm", "start"]

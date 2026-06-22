@@ -1,0 +1,17 @@
+node_modules
+npm-debug.log*
+.git
+.gitignore
+.env
+.env.*
+*.pem
+.claude.json
+.claude/
+.kamal/
+*.log
+.DS_Store
+dist
+build
+Dockerfile
+.dockerignore
+README.md

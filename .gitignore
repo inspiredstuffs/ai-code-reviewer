@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Build output (if you add a compile step later)
+dist/
+build/
+
+# Environment & secrets — NEVER commit these
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+
+# Logs
+*.log
+npm-debug.log*
+yarn-error.log*
+
+# Claude Code local state
+.claude/settings.local.json
+.claude.json
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+*.swp

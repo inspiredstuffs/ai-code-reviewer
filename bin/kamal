@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# bin/kamal — wrapper that auto-loads `.env.<destination>` from the
+# repo root before invoking Kamal, so you can run
+#
+#   bin/kamal -d production setup
+#   bin/kamal -d production deploy
+#   bin/kamal app logs -d production
+#
+# locally without manually exporting the same env vars CI sets via
+# repo secrets. CI environments have no `.env.production` file present;
+# the wrapper silently skips loading and delegates straight to Kamal.
+#
+# Convention (mirrors juto/bin/kamal):
+#
+#   .env.production.example   committed; documents what to set
+#   .env.production           gitignored; per-developer / deploy values
+#
+# File format is standard shell-assignment syntax:
+#
+#   KEY=value
+#   KEY_WITH_SPACES="value with spaces"
+#   # comments are fine
+#
+# (No multi-line values, no command substitution. Keep it boring.)
+#
+# **Argv rewriting.** Kamal's Thor CLI requires `-d <env>` to come
+# AFTER the subcommand chain (`kamal app logs -d production`, not
+# `kamal -d production app logs` — the latter prints help). The
+# wrapper plucks `-d <env>` (or `--destination <env>` / `-d=<env>` /
+# `--destination=<env>`) out of argv wherever it appears, uses it to
+# load the env file, then re-appends `-d <env>` at the END before
+# exec'ing Kamal. Lets you put the flag wherever feels natural.
+#
+# **Why no `bundle exec`?** This is a JS project — Kamal is installed
+# system-wide via `gem install kamal`, not via Bundler.
+
+set -euo pipefail
+
+env_name=""
+remaining=()
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -d|--destination)
+      shift
+      if [ $# -gt 0 ]; then
+        env_name="$1"
+        shift
+      fi
+      ;;
+    -d=*|--destination=*)
+      env_name="${1#*=}"
+      shift
+      ;;
+    *)
+      remaining+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if [ -n "$env_name" ] && [ -f ".env.${env_name}" ]; then
+  echo "→ bin/kamal: loading .env.${env_name}" >&2
+  # `set -a` auto-exports every variable defined while it's on; we
+  # toggle it off after sourcing so the calling shell isn't polluted.
+  set -a
+  # shellcheck disable=SC1090
+  . ".env.${env_name}"
+  set +a
+fi
+
+# Re-attach -d <env> at the END of argv so Kamal's Thor parsing
+# routes the subcommand correctly. Bash 3.2 (macOS default) treats
+# expansion of an empty array under `set -u` as an unbound-variable
+# error, hence the `${remaining[@]+"${remaining[@]}"}` guard.
+if [ -n "$env_name" ]; then
+  exec kamal ${remaining[@]+"${remaining[@]}"} -d "$env_name"
+else
+  exec kamal ${remaining[@]+"${remaining[@]}"}
+fi

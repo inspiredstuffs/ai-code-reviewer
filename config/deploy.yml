@@ -1,0 +1,44 @@
+# Base Kamal config for the Claude PR Reviewer — shared across destinations.
+# Per-env overrides (hosts + proxy/domain) live in config/deploy.<env>.yml and
+# are loaded via `bin/kamal -d <env>`. Deploy structure mirrors juto/bin/kamal;
+# runtime secret injection mirrors ayo-olopon (this service, unlike the juto SPA,
+# has real secrets to hand the container).
+
+<%
+  ssh_user_raw = ENV['SSH_USER'].to_s.strip
+  ssh_user     = ssh_user_raw.empty? ? 'deploy' : ssh_user_raw
+%>
+
+service: ai-code-reviewer
+# Image excludes the registry host; Kamal prefixes it from the registry block.
+image: inspiredstuffs/ai-code-reviewer
+
+ssh:
+  user: <%= ssh_user %>
+
+registry:
+  server: ghcr.io
+  username:
+    - KAMAL_REGISTRY_USERNAME
+  password:
+    - KAMAL_REGISTRY_PASSWORD
+
+# Build amd64 images from an arm64 Mac for the x86 Hetzner host.
+builder:
+  arch: amd64
+
+env:
+  secret:
+    - GITHUB_APP_ID
+    - GITHUB_APP_PRIVATE_KEY
+    - GITHUB_WEBHOOK_SECRET
+    - REVIEWER_LOGIN
+    - CLAUDE_CODE_OAUTH_TOKEN
+  clear:
+    PORT: "3000"
+    CLAUDE_MODEL: "claude-sonnet-4-6"
+
+# Hosts listed for legibility; the per-env file supplies the required array.
+servers:
+  web:
+    hosts: <%= ENV.fetch('WEB_HOSTS', '').split(',').map(&:strip).reject(&:empty?) %>

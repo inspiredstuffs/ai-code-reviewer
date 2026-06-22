@@ -1,0 +1,24 @@
+# Production overrides for the Claude PR Reviewer. Loaded via
+# `bin/kamal -d production`. Supplies the host(s) and the public domain Kamal's
+# built-in proxy serves over HTTPS (automatic Let's Encrypt — no Caddy/nginx).
+#
+# WEB_HOSTS / PROXY_HOST come from the operator's shell (.env.production via
+# bin/kamal) or a CI secret — never committed. Required, not defaulted, so a
+# missing value fails loudly at config-load instead of misrouting.
+
+<% web_hosts = ENV['WEB_HOSTS'].to_s.split(',').map(&:strip).reject(&:empty?) %>
+<% raise 'WEB_HOSTS env required (comma-separated host IPs/hostnames)' if web_hosts.empty? %>
+<% proxy_host = ENV['PROXY_HOST'].to_s.strip %>
+<% raise 'PROXY_HOST env required (public HTTPS hostname for the webhook)' if proxy_host.empty? %>
+
+servers:
+  web:
+    hosts: <%= web_hosts %>
+
+proxy:
+  ssl: true
+  host: <%= proxy_host %>
+  app_port: 3000
+  healthcheck:
+    path: /health
+    interval: 5
