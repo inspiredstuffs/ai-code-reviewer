@@ -161,6 +161,7 @@ type ReviewTarget = {
   repo: string;
   pull_number: number;
   key: string;
+  reviewer: string; // the requested login to clear once the review is posted
 };
 
 /**
@@ -168,7 +169,7 @@ type ReviewTarget = {
  * one review. Throws on failure so the caller can release the idempotency key for a
  * later retry.
  */
-async function processReview({ octokit, owner, repo, pull_number, key }: ReviewTarget): Promise<void> {
+async function processReview({ octokit, owner, repo, pull_number, key, reviewer }: ReviewTarget): Promise<void> {
   // 1. Fetch the PR as a unified diff.
   const diffResp = await octokit.request("GET /repos/{owner}/{repo}/pulls/{pull_number}", {
     owner,
@@ -215,6 +216,20 @@ async function processReview({ octokit, owner, repo, pull_number, key }: ReviewT
   }
 
   console.log(`[${key}] review posted`);
+
+  // Clear the pending review request. The App comments as itself, which never
+  // satisfies the request, so the bot reviewer would otherwise sit in "awaiting
+  // review" forever. Best-effort — only reached on a successful post.
+  try {
+    await octokit.rest.pulls.removeRequestedReviewers({
+      owner,
+      repo,
+      pull_number,
+      reviewers: [reviewer],
+    });
+  } catch (err) {
+    console.warn(`[${key}] could not clear review request for ${reviewer}:`, err);
+  }
 }
 
 ghApp.webhooks.on("pull_request.review_requested", async ({ octokit, payload }) => {
@@ -243,7 +258,7 @@ ghApp.webhooks.on("pull_request.review_requested", async ({ octokit, payload }) 
   // Hand the review to the queue and return immediately, so the webhook is acked well
   // inside GitHub's ~10s window. The work runs in the background, one review at a time.
   void queue
-    .add(() => processReview({ octokit, owner, repo, pull_number, key }))
+    .add(() => processReview({ octokit, owner, repo, pull_number, key, reviewer: requested }))
     .catch(async (err) => {
       // Release the key so a later re-request can retry this exact head SHA.
       reviewedHeads.delete(key);
