@@ -18,11 +18,8 @@
 
 import express from "express";
 import { App, Octokit } from "octokit";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { spawn } from "node:child_process";
 import PQueue from "p-queue";
-
-const execFileAsync = promisify(execFile);
 
 const {
   GITHUB_APP_ID,
@@ -76,17 +73,7 @@ Rules:
 DIFF:
 ${diff}`;
 
-  const { stdout } = await execFileAsync(
-    "claude",
-    ["-p", "--output-format", "json", "--max-turns", "1", "--model", CLAUDE_MODEL],
-    {
-      input: prompt,
-      maxBuffer: 16 * 1024 * 1024,
-      // Inherit env so CLAUDE_CODE_OAUTH_TOKEN is picked up.
-      // Ensure ANTHROPIC_API_KEY is NOT set, or it takes precedence over the subscription.
-      env: process.env,
-    },
-  );
+  const stdout = await runClaude(prompt);
 
   const envelope = JSON.parse(stdout);            // Claude Code wraps the reply in an envelope
   const text = String(envelope.result ?? "").trim();
@@ -95,6 +82,38 @@ ${diff}`;
 
 function stripFences(s: string): string {
   return s.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+}
+
+/**
+ * Run `claude -p` headlessly, feeding the prompt on stdin (NOT as an argv — a diff
+ * can exceed the OS argument-length limit) and resolving with its stdout. Uses
+ * spawn because promisified execFile silently ignores an `input` option, so the
+ * prompt would never reach Claude.
+ */
+function runClaude(prompt: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    // Inherit env so CLAUDE_CODE_OAUTH_TOKEN is picked up. ANTHROPIC_API_KEY must
+    // NOT be set, or it takes precedence over the subscription token.
+    const child = spawn(
+      "claude",
+      ["-p", "--output-format", "json", "--max-turns", "1", "--model", CLAUDE_MODEL],
+      { env: process.env, stdio: ["pipe", "pipe", "pipe"] },
+    );
+
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => (stdout += chunk));
+    child.stderr.on("data", (chunk) => (stderr += chunk));
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) resolve(stdout);
+      else reject(new Error(`claude exited with code ${code}: ${stderr.trim().slice(0, 1000)}`));
+    });
+
+    // Surface stdin errors (e.g. EPIPE if Claude exits before reading it all).
+    child.stdin.on("error", reject);
+    child.stdin.end(prompt);
+  });
 }
 
 type ReviewTarget = {
