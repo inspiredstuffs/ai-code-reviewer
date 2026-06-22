@@ -25,15 +25,36 @@ const {
   GITHUB_APP_ID,
   GITHUB_APP_PRIVATE_KEY,
   GITHUB_WEBHOOK_SECRET,
-  REVIEWER_LOGIN,                       // user/bot account that, when requested, triggers a review
+  REVIEWER_LOGIN,                       // login(s) that, when requested as reviewer, trigger a review
   CLAUDE_MODEL = "claude-sonnet-4-6",
   PORT = "3000",
 } = process.env;
 
+// Accounts whose requested review triggers Claude. REVIEWER_LOGIN may be a single
+// login or a comma-separated list (e.g. "ayewobot,inspiredstuffs"), matched
+// case-insensitively.
+const REVIEWER_LOGINS = new Set(
+  (REVIEWER_LOGIN ?? "")
+    .split(",")
+    .map((login) => login.trim().toLowerCase())
+    .filter(Boolean),
+);
+
+/**
+ * Restore the GitHub App private key from its env var. Accepts a PEM with real
+ * newlines, a `\n`-escaped one-liner, or base64(PEM). base64 is preferred for
+ * deploys: it has no backslashes or newlines for env-file layers to mangle.
+ * (Kamal double-escapes backslashes when writing the container env-file, which
+ * turned a `\n`-encoded key into `\\n` and broke OpenSSL decoding.)
+ */
+function loadAppPrivateKey(raw: string): string {
+  const v = raw.trim();
+  return v.includes("BEGIN") ? v.replace(/\\n/g, "\n") : Buffer.from(v, "base64").toString("utf8");
+}
+
 const ghApp = new App({
   appId: GITHUB_APP_ID!,
-  // PEM is usually stored on one line with literal "\n" — restore real newlines:
-  privateKey: GITHUB_APP_PRIVATE_KEY!.replace(/\\n/g, "\n"),
+  privateKey: loadAppPrivateKey(GITHUB_APP_PRIVATE_KEY!),
   webhooks: { secret: GITHUB_WEBHOOK_SECRET! },
 });
 
@@ -183,9 +204,9 @@ ghApp.webhooks.on("pull_request.review_requested", async ({ octokit, payload }) 
   // (Team requests carry `requested_team` instead and are ignored here.)
   const requested =
     "requested_reviewer" in payload ? payload.requested_reviewer?.login : undefined;
-  // Case-insensitive: GitHub logins ignore case, and a casing mismatch here would
-  // silently no-op with no log line — the exact failure mode we hit during setup.
-  if (!REVIEWER_LOGIN || requested?.toLowerCase() !== REVIEWER_LOGIN.toLowerCase()) return;
+  // Match against the allowed reviewer logins (case-insensitive). A mismatch
+  // silently no-ops with no log line — the failure mode we hit during setup.
+  if (!requested || !REVIEWER_LOGINS.has(requested.toLowerCase())) return;
 
   const owner = payload.repository.owner.login;
   const repo = payload.repository.name;
