@@ -14,6 +14,19 @@ export type ReviewComment = {
 };
 export type ReviewResult = { summary: string; comments: ReviewComment[] };
 
+/**
+ * Parse an env var that must be a positive integer, throwing an actionable error
+ * otherwise. Guards against `Number("")`/`Number("abc")` silently yielding `0`/`NaN`
+ * and reaching `claude --max-turns NaN`. Validated at boot so misconfig fails fast.
+ */
+export function parsePositiveInt(value: string, name: string): number {
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 1) {
+    throw new Error(`${name} must be a positive integer, got: ${JSON.stringify(value)}`);
+  }
+  return n;
+}
+
 /** PR label that opts a single pull request into a deep review. */
 export const DEEP_REVIEW_LABEL = "deep-review";
 

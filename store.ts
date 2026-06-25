@@ -75,8 +75,9 @@ export class ReviewStore {
    * retried), `false` if it's already posted or currently in flight.
    *
    * Atomic: the read-and-claim runs in a single transaction, so concurrent
-   * callers can't both reserve the same key. A failed row is flipped back to
-   * `pending` in place — the audit history of the failure is preserved.
+   * callers can't both reserve the same key. A failed row is reclaimed in place
+   * and reset for a fresh attempt — its prior `error` is cleared and
+   * `requested_at` updated (only one attempt's outcome is kept per head SHA).
    */
   reserve(ref: ReviewRef, reviewer: string, now: string): boolean {
     const claim = this.#db.transaction((): boolean => {

@@ -4,10 +4,22 @@ import {
   buildClaudeArgs,
   buildContextPrompt,
   buildDiffPrompt,
+  parsePositiveInt,
   parseReviewResult,
   shouldDeepReview,
   stripFences,
 } from "../review.ts";
+
+test("parsePositiveInt accepts positive integers (trimming whitespace)", () => {
+  assert.equal(parsePositiveInt("8", "X"), 8);
+  assert.equal(parsePositiveInt(" 12 ", "X"), 12);
+});
+
+test("parsePositiveInt rejects empty, non-numeric, fractional, and non-positive values", () => {
+  for (const bad of ["", "abc", "8.5", "0", "-3", "NaN"]) {
+    assert.throws(() => parsePositiveInt(bad, "DEEP_REVIEW_MAX_TURNS"), /DEEP_REVIEW_MAX_TURNS must be a positive integer/);
+  }
+});
 
 test("shouldDeepReview: env default off, no label → shallow", () => {
   assert.equal(shouldDeepReview(false, []), false);

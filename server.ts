@@ -27,6 +27,7 @@ import {
   buildClaudeArgs,
   buildContextPrompt,
   buildDiffPrompt,
+  parsePositiveInt,
   parseReviewResult,
   shouldDeepReview,
   type ClaudeRunOpts,
@@ -52,7 +53,7 @@ const now = (): string => new Date().toISOString();
 // READ-ONLY tools (no Bash/Write/Edit), so untrusted PR code can't be executed. Opt
 // in via DEEP_REVIEW=true; otherwise reviews stay diff-only.
 const deepReviewEnabled = DEEP_REVIEW.toLowerCase() === "true";
-const deepReviewMaxTurns = Number(DEEP_REVIEW_MAX_TURNS);
+const deepReviewMaxTurns = parsePositiveInt(DEEP_REVIEW_MAX_TURNS, "DEEP_REVIEW_MAX_TURNS");
 const DEEP_REVIEW_TOOLS = ["Read", "Grep", "Glob"] as const;
 
 // Accounts whose requested review triggers Claude. REVIEWER_LOGIN may be a single
