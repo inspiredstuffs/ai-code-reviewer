@@ -37,6 +37,13 @@ env:
   clear:
     PORT: "3000"
     CLAUDE_MODEL: "claude-sonnet-4-6"
+    DATABASE_PATH: "/data/reviews.db"
+
+# Persist the SQLite review store across deploys. Without this the DB lives inside
+# the container and every redeploy wipes the idempotency/audit history. The image
+# creates /data node-owned (see Dockerfile) so the fresh named volume is writable.
+volumes:
+  - "ai_code_reviewer_data:/data"
 
 # Hosts listed for legibility; the per-env file supplies the required array.
 servers:

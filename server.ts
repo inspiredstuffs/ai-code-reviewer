@@ -19,7 +19,10 @@
 import express from "express";
 import { App, Octokit } from "octokit";
 import { spawn } from "node:child_process";
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 import PQueue from "p-queue";
+import { ReviewStore, type ReviewRef } from "./store.ts";
 
 const {
   GITHUB_APP_ID,
@@ -27,8 +30,11 @@ const {
   GITHUB_WEBHOOK_SECRET,
   REVIEWER_LOGIN,                       // login(s) that, when requested as reviewer, trigger a review
   CLAUDE_MODEL = "claude-sonnet-4-6",
+  DATABASE_PATH = "./data/reviews.db",  // SQLite file; mount a volume here in prod
   PORT = "3000",
 } = process.env;
+
+const now = (): string => new Date().toISOString();
 
 // Accounts whose requested review triggers Claude. REVIEWER_LOGIN may be a single
 // login or a comma-separated list (e.g. "ayewobot,inspiredstuffs"), matched
@@ -63,12 +69,14 @@ const ghApp = new App({
 // concurrent CLI processes when several reviews are requested at once.
 const queue = new PQueue({ concurrency: 1 });
 
-// Head SHAs already reviewed (or in flight), keyed per PR so the same commit on a
-// different PR is still reviewed. Reserving the key before work starts also dedupes
-// GitHub's redelivery retries. In-memory only: a process restart clears it, which at
-// worst re-reviews an open PR once. Failed reviews release their key so a re-request
-// can retry.
-const reviewedHeads = new Set<string>();
+// Durable record of every review request, keyed per (PR, head SHA). Reserving a
+// row before work starts dedupes GitHub's redelivery retries and survives process
+// restarts. Failed reviews stay retryable; see store.ts. Any row left "pending" by
+// a crash is recovered to "failed" at boot so it doesn't block a retry forever.
+if (DATABASE_PATH !== ":memory:") mkdirSync(dirname(DATABASE_PATH), { recursive: true });
+const store = new ReviewStore(DATABASE_PATH);
+const orphaned = store.recoverOrphans(now());
+if (orphaned > 0) console.warn(`recovered ${orphaned} review(s) left pending by a previous run`);
 
 type ReviewComment = {
   path: string;
@@ -157,19 +165,18 @@ function runClaude(prompt: string): Promise<string> {
 
 type ReviewTarget = {
   octokit: Octokit;
-  owner: string;
-  repo: string;
-  pull_number: number;
-  key: string;
+  ref: ReviewRef;   // owner/repo/pull_number/head_sha — the store key
+  key: string;      // human-readable label for logs
   reviewer: string; // the requested login to clear once the review is posted
 };
 
 /**
  * Fetch the PR diff, review it on the Claude subscription, and post the result as
- * one review. Throws on failure so the caller can release the idempotency key for a
- * later retry.
+ * one review. Records the outcome in the store on success; throws on failure so the
+ * caller can mark it failed (keeping the head SHA retryable on re-request).
  */
-async function processReview({ octokit, owner, repo, pull_number, key, reviewer }: ReviewTarget): Promise<void> {
+async function processReview({ octokit, ref, key, reviewer }: ReviewTarget): Promise<void> {
+  const { owner, repo, pull_number } = ref;
   // 1. Fetch the PR as a unified diff.
   const diffResp = await octokit.request("GET /repos/{owner}/{repo}/pulls/{pull_number}", {
     owner,
@@ -215,6 +222,7 @@ async function processReview({ octokit, owner, repo, pull_number, key, reviewer 
     });
   }
 
+  store.markPosted(ref, result.summary ?? "", comments.length, now());
   console.log(`[${key}] review posted`);
   await clearReviewRequest(octokit, { owner, repo, pull_number, key }, reviewer);
 }
@@ -253,27 +261,28 @@ ghApp.webhooks.on("pull_request.review_requested", async ({ octokit, payload }) 
   const owner = payload.repository.owner.login;
   const repo = payload.repository.name;
   const pull_number = payload.pull_request.number;
-  const headSha = payload.pull_request.head.sha;
-  const key = `${owner}/${repo}#${pull_number}@${headSha}`;
+  const head_sha = payload.pull_request.head.sha;
+  const ref: ReviewRef = { owner, repo, pull_number, head_sha };
+  const key = `${owner}/${repo}#${pull_number}@${head_sha}`;
 
-  // Idempotency: skip a head SHA we've already reviewed. Reserving the key now (before
-  // any await) also dedupes GitHub's redelivery of webhooks we don't ack in time.
-  if (reviewedHeads.has(key)) {
-    console.log(`[${key}] already reviewed; skipping`);
+  // Idempotency: reserve this head SHA. A `false` return means it's already posted
+  // or in flight — skip. Reserving synchronously (before any await) also dedupes
+  // GitHub's redelivery of webhooks we don't ack in time.
+  if (!store.reserve(ref, requested, now())) {
+    console.log(`[${key}] already reviewed or in flight; skipping`);
     // The review already exists — still clear the re-request so the bot doesn't
     // get stuck "awaiting review" for this commit. Fire-and-forget.
     void clearReviewRequest(octokit, { owner, repo, pull_number, key }, requested);
     return;
   }
-  reviewedHeads.add(key);
 
   // Hand the review to the queue and return immediately, so the webhook is acked well
   // inside GitHub's ~10s window. The work runs in the background, one review at a time.
   void queue
-    .add(() => processReview({ octokit, owner, repo, pull_number, key, reviewer: requested }))
+    .add(() => processReview({ octokit, ref, key, reviewer: requested }))
     .catch(async (err) => {
-      // Release the key so a later re-request can retry this exact head SHA.
-      reviewedHeads.delete(key);
+      // Mark failed so a later re-request can retry this exact head SHA.
+      store.markFailed(ref, err instanceof Error ? err.message : String(err), now());
       console.error(`[${key}] review failed:`, err);
       // Don't leave the PR in limbo — post a short note so the requester knows it
       // failed and can re-request. Best-effort; ignore errors posting it.

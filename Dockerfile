@@ -38,6 +38,11 @@ RUN printf '%s' \
     > /home/node/.claude.json \
   && chown -R node:node /app /home/node
 
+# SQLite review store lives here. Created node-owned so a fresh Kamal named volume
+# (Docker seeds an empty volume from the image dir's ownership) is writable by the
+# unprivileged runtime user. DATABASE_PATH points here in config/deploy.yml.
+RUN mkdir -p /data && chown node:node /data
+
 USER node
 
 EXPOSE 3000
