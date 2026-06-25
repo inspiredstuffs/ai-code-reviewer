@@ -102,6 +102,13 @@ These are implemented, not aspirational:
 - **Single instance:** the in-process queue and the local SQLite file both assume
   exactly one running instance. Don't scale to multiple replicas without moving
   the queue and store onto shared infrastructure.
+- **Unbounded, in-memory queue:** reviews run one at a time (queue concurrency 1),
+  but the backlog is unbounded and lives in memory. A burst of requests grows
+  memory and latency with no backpressure, and a restart drops everything still
+  queued — those rows are recovered to `failed` at boot, so each dropped PR must
+  be re-requested. Fine for personal / small-org use; for heavier load, add a
+  bounded queue that posts a "busy, please re-request" notice rather than raising
+  concurrency (which trades away the predictable-memory guarantee).
 
 ## Next steps
 
