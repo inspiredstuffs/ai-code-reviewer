@@ -110,8 +110,26 @@ These are implemented, not aspirational:
   bounded queue that posts a "busy, please re-request" notice rather than raising
   concurrency (which trades away the predictable-memory guarantee).
 
-## Next steps
+## Deep reviews (optional)
 
-- **Deeper reviews:** for more than diff-only analysis, clone the repo with the
-  installation token, check out the PR branch, and run `claude -p` in that
-  working dir so it can open surrounding files (raise `--max-turns`).
+By default a review sees only the unified diff. A deep review instead clones the
+PR head and lets Claude open **surrounding files** (definitions, call sites, tests)
+for richer, context-aware comments.
+
+- **Per PR:** add the `deep-review` label to a pull request. The next time the bot
+  is requested (or re-requested) as reviewer, that PR gets a deep review.
+- **Globally:** set `DEEP_REVIEW=true` to make every review deep. The label still
+  works; it just opts individual PRs in when the global default is off.
+
+- **How it works:** a short-lived, repo-scoped installation token (contents:read)
+  fetches `refs/pull/<n>/head` into a throwaway temp dir — shallow, and working for
+  fork PRs too. Claude runs against that checkout with a raised turn budget
+  (`DEEP_REVIEW_MAX_TURNS`, default 8); the temp dir is always removed afterward.
+- **Security:** Claude gets **read-only** tools (`Read`, `Grep`, `Glob`) — never
+  `Bash`/`Write`/`Edit` — so untrusted PR code is read, never executed. The token
+  is passed via `GIT_CONFIG_*` env, so it never lands in `.git/config` or the
+  process list. The worst case from a malicious PR is a wrong comment, not RCE.
+- **Cost:** every deep review clones a repo and uses multiple turns, drawing more
+  from your subscription than a diff-only pass. Leave it off unless you want it.
+- **Requirements:** `git` on the host (bundled in the image) and the App's
+  Contents: Read permission (already in the setup above).

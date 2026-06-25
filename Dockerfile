@@ -8,9 +8,9 @@
 FROM node:22-slim
 
 # Claude Code CLI, installed globally as root before we drop privileges.
-# curl is only needed for the container HEALTHCHECK below.
+# curl is for the container HEALTHCHECK; git is for deep reviews (cloning the PR).
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends curl \
+  && apt-get install -y --no-install-recommends curl git \
   && rm -rf /var/lib/apt/lists/* \
   && npm install -g @anthropic-ai/claude-code
 

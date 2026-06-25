@@ -23,6 +23,16 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import PQueue from "p-queue";
 import { ReviewStore, type ReviewRef } from "./store.ts";
+import {
+  buildClaudeArgs,
+  buildContextPrompt,
+  buildDiffPrompt,
+  parseReviewResult,
+  shouldDeepReview,
+  type ClaudeRunOpts,
+  type ReviewResult,
+} from "./review.ts";
+import { clonePrHead, removeWorkdir } from "./clone.ts";
 
 const {
   GITHUB_APP_ID,
@@ -31,10 +41,19 @@ const {
   REVIEWER_LOGIN,                       // login(s) that, when requested as reviewer, trigger a review
   CLAUDE_MODEL = "claude-sonnet-4-6",
   DATABASE_PATH = "./data/reviews.db",  // SQLite file; mount a volume here in prod
+  DEEP_REVIEW = "false",                // "true" → clone the PR so Claude can read surrounding files
+  DEEP_REVIEW_MAX_TURNS = "8",          // turn budget for a deep review (diff-only is always 1)
   PORT = "3000",
 } = process.env;
 
 const now = (): string => new Date().toISOString();
+
+// Deep reviews check out the PR branch and let Claude open surrounding files with
+// READ-ONLY tools (no Bash/Write/Edit), so untrusted PR code can't be executed. Opt
+// in via DEEP_REVIEW=true; otherwise reviews stay diff-only.
+const deepReviewEnabled = DEEP_REVIEW.toLowerCase() === "true";
+const deepReviewMaxTurns = Number(DEEP_REVIEW_MAX_TURNS);
+const DEEP_REVIEW_TOOLS = ["Read", "Grep", "Glob"] as const;
 
 // Accounts whose requested review triggers Claude. REVIEWER_LOGIN may be a single
 // login or a comma-separated list (e.g. "ayewobot,inspiredstuffs"), matched
@@ -78,39 +97,54 @@ const store = new ReviewStore(DATABASE_PATH);
 const orphaned = store.recoverOrphans(now());
 if (orphaned > 0) console.warn(`recovered ${orphaned} review(s) left pending by a previous run`);
 
-type ReviewComment = {
-  path: string;
-  line: number;
-  side?: "RIGHT" | "LEFT";
-  severity?: "info" | "warn" | "blocker";
-  body: string;
-};
-type ReviewResult = { summary: string; comments: ReviewComment[] };
-
-/** Ask Claude to review a unified diff and return structured JSON. */
+/** Diff-only review: Claude sees just the unified diff (single pass). */
 async function reviewDiff(diff: string): Promise<ReviewResult> {
-  const prompt = `You are reviewing a GitHub pull request from the unified diff below.
-Respond with ONLY a JSON object (no prose, no markdown fences) of the form:
-{"summary": string, "comments": [{"path": string, "line": number, "side": "RIGHT"|"LEFT", "severity": "info"|"warn"|"blocker", "body": string}]}
-Rules:
-- Only comment on lines that appear in the diff.
-- "line" is the line number in the file's NEW version; use side "RIGHT" for added/changed
-  lines and "LEFT" for removed lines.
-- Be specific and actionable. Skip nitpicks unless they matter.
-- If nothing needs changing, return an empty "comments" array.
-
-DIFF:
-${diff}`;
-
-  const stdout = await runClaude(prompt);
-
-  const envelope = JSON.parse(stdout);            // Claude Code wraps the reply in an envelope
-  const text = String(envelope.result ?? "").trim();
-  return JSON.parse(stripFences(text)) as ReviewResult;
+  return parseReviewResult(await runClaude(buildDiffPrompt(diff)));
 }
 
-function stripFences(s: string): string {
-  return s.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+/**
+ * Deep review: check out the PR head, let Claude open surrounding files with
+ * read-only tools, then always clean up the working dir. Falls back to nothing —
+ * the caller only routes here when DEEP_REVIEW is enabled.
+ */
+async function reviewWithContext(
+  ref: ReviewRef,
+  installationId: number,
+  diff: string,
+  key: string,
+): Promise<ReviewResult> {
+  const token = await mintInstallationToken(installationId, ref.repo);
+  let clonePath: string | undefined;
+  try {
+    clonePath = await clonePrHead({
+      owner: ref.owner,
+      repo: ref.repo,
+      pull_number: ref.pull_number,
+      token,
+    });
+    console.log(`[${key}] PR head checked out; deep review (max-turns ${deepReviewMaxTurns})`);
+    const stdout = await runClaude(buildContextPrompt(diff, clonePath), {
+      maxTurns: deepReviewMaxTurns,
+      addDir: clonePath,
+      allowedTools: DEEP_REVIEW_TOOLS,
+    });
+    return parseReviewResult(stdout);
+  } finally {
+    if (clonePath) await removeWorkdir(clonePath);
+  }
+}
+
+/**
+ * Mint a short-lived installation token scoped to just this repo with contents:read
+ * — least privilege, enough to fetch the PR head for a clone.
+ */
+async function mintInstallationToken(installationId: number, repo: string): Promise<string> {
+  const { data } = await ghApp.octokit.rest.apps.createInstallationAccessToken({
+    installation_id: installationId,
+    repositories: [repo],
+    permissions: { contents: "read" },
+  });
+  return data.token;
 }
 
 /** A short PR note shown when a review couldn't be completed, so the requester
@@ -137,13 +171,13 @@ function failureNotice(err: unknown): string {
  * spawn because promisified execFile silently ignores an `input` option, so the
  * prompt would never reach Claude.
  */
-function runClaude(prompt: string): Promise<string> {
+function runClaude(prompt: string, opts: ClaudeRunOpts = {}): Promise<string> {
   return new Promise((resolve, reject) => {
     // Inherit env so CLAUDE_CODE_OAUTH_TOKEN is picked up. ANTHROPIC_API_KEY must
     // NOT be set, or it takes precedence over the subscription token.
     const child = spawn(
       "claude",
-      ["-p", "--output-format", "json", "--max-turns", "1", "--model", CLAUDE_MODEL],
+      buildClaudeArgs(CLAUDE_MODEL, opts),
       { env: process.env, stdio: ["pipe", "pipe", "pipe"] },
     );
 
@@ -165,9 +199,11 @@ function runClaude(prompt: string): Promise<string> {
 
 type ReviewTarget = {
   octokit: Octokit;
-  ref: ReviewRef;   // owner/repo/pull_number/head_sha — the store key
-  key: string;      // human-readable label for logs
-  reviewer: string; // the requested login to clear once the review is posted
+  ref: ReviewRef;            // owner/repo/pull_number/head_sha — the store key
+  key: string;               // human-readable label for logs
+  reviewer: string;          // the requested login to clear once the review is posted
+  deep: boolean;             // run a clone-based deep review (env default or PR label)
+  installationId?: number;   // needed to mint a token for deep (clone-based) reviews
 };
 
 /**
@@ -175,7 +211,7 @@ type ReviewTarget = {
  * one review. Records the outcome in the store on success; throws on failure so the
  * caller can mark it failed (keeping the head SHA retryable on re-request).
  */
-async function processReview({ octokit, ref, key, reviewer }: ReviewTarget): Promise<void> {
+async function processReview({ octokit, ref, key, reviewer, deep, installationId }: ReviewTarget): Promise<void> {
   const { owner, repo, pull_number } = ref;
   // 1. Fetch the PR as a unified diff.
   const diffResp = await octokit.request("GET /repos/{owner}/{repo}/pulls/{pull_number}", {
@@ -186,8 +222,12 @@ async function processReview({ octokit, ref, key, reviewer }: ReviewTarget): Pro
   });
   const diff = diffResp.data as unknown as string;
 
-  // 2. Review on your Claude subscription.
-  const result = await reviewDiff(diff);
+  // 2. Review on your Claude subscription. Deep review clones the PR for file context
+  //    when requested and we have an installation id; otherwise it's a diff-only pass.
+  const result =
+    deep && installationId !== undefined
+      ? await reviewWithContext(ref, installationId, diff, key)
+      : await reviewDiff(diff);
 
   const comments = (result.comments ?? [])
     .filter((c) => c.path && Number.isInteger(c.line))
@@ -262,8 +302,13 @@ ghApp.webhooks.on("pull_request.review_requested", async ({ octokit, payload }) 
   const repo = payload.repository.name;
   const pull_number = payload.pull_request.number;
   const head_sha = payload.pull_request.head.sha;
+  const installationId = payload.installation?.id;  // present on App-scoped deliveries
   const ref: ReviewRef = { owner, repo, pull_number, head_sha };
   const key = `${owner}/${repo}#${pull_number}@${head_sha}`;
+
+  // Deep review when it's the configured default, or the PR carries the deep-review label.
+  const labels = payload.pull_request.labels?.map((l) => l.name) ?? [];
+  const deep = shouldDeepReview(deepReviewEnabled, labels);
 
   // Idempotency: reserve this head SHA. A `false` return means it's already posted
   // or in flight — skip. Reserving synchronously (before any await) also dedupes
@@ -279,7 +324,7 @@ ghApp.webhooks.on("pull_request.review_requested", async ({ octokit, payload }) 
   // Hand the review to the queue and return immediately, so the webhook is acked well
   // inside GitHub's ~10s window. The work runs in the background, one review at a time.
   void queue
-    .add(() => processReview({ octokit, ref, key, reviewer: requested }))
+    .add(() => processReview({ octokit, ref, key, reviewer: requested, deep, installationId }))
     .catch(async (err) => {
       // Mark failed so a later re-request can retry this exact head SHA.
       store.markFailed(ref, err instanceof Error ? err.message : String(err), now());

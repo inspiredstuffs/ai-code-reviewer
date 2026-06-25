@@ -38,6 +38,10 @@ env:
     PORT: "3000"
     CLAUDE_MODEL: "claude-sonnet-4-6"
     DATABASE_PATH: "/data/reviews.db"
+    # Deep reviews clone the PR so Claude can read surrounding files (read-only
+    # tools). Off by default; set to "true" to enable. See README "Deep reviews".
+    DEEP_REVIEW: "false"
+    DEEP_REVIEW_MAX_TURNS: "8"
 
 # Persist the SQLite review store across deploys. Without this the DB lives inside
 # the container and every redeploy wipes the idempotency/audit history. The image
