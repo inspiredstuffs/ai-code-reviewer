@@ -44,6 +44,7 @@ const {
   DATABASE_PATH = "./data/reviews.db",  // SQLite file; mount a volume here in prod
   DEEP_REVIEW = "false",                // "true" → clone the PR so Claude can read surrounding files
   DEEP_REVIEW_MAX_TURNS = "8",          // turn budget for a deep review (diff-only is always 1)
+  BOT_NAME = "Alátùńwò AI",             // display name in the review header/notice
   PORT = "3000",
 } = process.env;
 
@@ -153,7 +154,7 @@ async function mintInstallationToken(installationId: number, repo: string): Prom
 function failureNotice(err: unknown): string {
   const detail = (err instanceof Error ? err.message : String(err)).slice(0, 500);
   return [
-    "🤖 **Claude review failed** — I couldn't complete this review.",
+    `🤖 **${BOT_NAME} review failed** — I couldn't complete this review.`,
     "",
     "Please re-request a review (the ↻ icon next to the reviewer) to try again.",
     "",
@@ -239,7 +240,7 @@ async function processReview({ octokit, ref, key, reviewer, deep, installationId
       body: c.severity ? `**${c.severity.toUpperCase()}** — ${c.body}` : c.body,
     }));
 
-  const header = `🤖 **Claude review**\n\n${result.summary ?? ""}`;
+  const header = `🤖 **${BOT_NAME} review**\n\n${result.summary ?? ""}`;
 
   // 3. Post one review with inline comments. GitHub rejects the whole review (422)
   //    if any inline comment targets a line outside the diff — fall back to summary-only.
