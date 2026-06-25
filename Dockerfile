@@ -9,8 +9,10 @@ FROM node:22-slim
 
 # Claude Code CLI, installed globally as root before we drop privileges.
 # curl is for the container HEALTHCHECK; git is for deep reviews (cloning the PR).
+# ca-certificates supplies the system CA bundle git needs to verify github.com over
+# HTTPS — the slim base omits it, so without this a clone fails cert verification.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends curl git \
+  && apt-get install -y --no-install-recommends curl git ca-certificates \
   && rm -rf /var/lib/apt/lists/* \
   && npm install -g @anthropic-ai/claude-code
 
