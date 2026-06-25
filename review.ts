@@ -96,6 +96,20 @@ DIFF:
 ${diff}`;
 }
 
+/**
+ * Build the posted review's header: the bot title, a badge for the review depth,
+ * and a one-line caption telling the reader how much context the review had. `deep`
+ * must reflect what actually ran (a deep review that fell back to diff-only is not
+ * deep), so readers can calibrate how much to trust a clean result.
+ */
+export function buildReviewHeader(botName: string, deep: boolean, summary: string): string {
+  const badge = deep ? "🔬 Deep" : "📄 Diff-only";
+  const caption = deep
+    ? "Reviewed with full repository context — surrounding files, call sites, and tests."
+    : "Reviewed from the pull request diff only (no surrounding files).";
+  return `🤖 **${botName} review** · ${badge}\n\n> _${caption}_\n\n${summary}`;
+}
+
 /** Strip a leading/trailing ```json fence Claude sometimes adds despite instructions. */
 export function stripFences(s: string): string {
   return s.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();

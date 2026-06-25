@@ -27,6 +27,7 @@ import {
   buildClaudeArgs,
   buildContextPrompt,
   buildDiffPrompt,
+  buildReviewHeader,
   parsePositiveInt,
   parseReviewResult,
   shouldDeepReview,
@@ -226,10 +227,15 @@ async function processReview({ octokit, ref, key, reviewer, deep, installationId
 
   // 2. Review on your Claude subscription. Deep review clones the PR for file context
   //    when requested and we have an installation id; otherwise it's a diff-only pass.
-  const result =
-    deep && installationId !== undefined
-      ? await reviewWithContext(ref, installationId, diff, key)
-      : await reviewDiff(diff);
+  //    Track what actually ran so the header reflects reality (not just what was asked).
+  let result: ReviewResult;
+  let didDeepReview = false;
+  if (deep && installationId !== undefined) {
+    didDeepReview = true;
+    result = await reviewWithContext(ref, installationId, diff, key);
+  } else {
+    result = await reviewDiff(diff);
+  }
 
   const comments = (result.comments ?? [])
     .filter((c) => c.path && Number.isInteger(c.line))
@@ -240,7 +246,7 @@ async function processReview({ octokit, ref, key, reviewer, deep, installationId
       body: c.severity ? `**${c.severity.toUpperCase()}** — ${c.body}` : c.body,
     }));
 
-  const header = `🤖 **${BOT_NAME} review**\n\n${result.summary ?? ""}`;
+  const header = buildReviewHeader(BOT_NAME, didDeepReview, result.summary ?? "");
 
   // 3. Post one review with inline comments. GitHub rejects the whole review (422)
   //    if any inline comment targets a line outside the diff — fall back to summary-only.

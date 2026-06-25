@@ -4,11 +4,33 @@ import {
   buildClaudeArgs,
   buildContextPrompt,
   buildDiffPrompt,
+  buildReviewHeader,
   parsePositiveInt,
   parseReviewResult,
   shouldDeepReview,
   stripFences,
 } from "../review.ts";
+
+test("buildReviewHeader marks a deep review with the bot name, badge, and summary", () => {
+  const header = buildReviewHeader("Alátùńwò AI", true, "Looks solid.");
+  assert.ok(header.includes("**Alátùńwò AI review**"), "bot name in title");
+  assert.ok(header.includes("🔬 Deep"), "deep badge");
+  assert.ok(header.toLowerCase().includes("full repository context"), "deep caption");
+  assert.ok(header.endsWith("Looks solid."), "summary appended");
+});
+
+test("buildReviewHeader marks a diff-only review distinctly", () => {
+  const header = buildReviewHeader("Alátùńwò AI", false, "Nits only.");
+  assert.ok(header.includes("📄 Diff-only"), "diff-only badge");
+  assert.ok(header.includes("diff only"), "diff-only caption");
+  assert.ok(!header.includes("🔬 Deep"), "must not claim deep");
+});
+
+test("buildReviewHeader handles an empty summary without trailing noise", () => {
+  const header = buildReviewHeader("Bot", false, "");
+  assert.ok(header.includes("**Bot review**"));
+  assert.ok(header.endsWith("_\n\n"), "ends after the caption when there's no summary");
+});
 
 test("parsePositiveInt accepts positive integers (trimming whitespace)", () => {
   assert.equal(parsePositiveInt("8", "X"), 8);
