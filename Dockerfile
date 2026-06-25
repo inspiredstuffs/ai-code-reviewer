@@ -20,8 +20,11 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
-# Application source (single entrypoint — no build artifacts to copy).
-COPY server.ts ./
+# Application source: all root-level TypeScript modules (server.ts and its
+# siblings store.ts/review.ts/clone.ts). Run directly via tsx — no build step.
+# Tests live in test/ and are not copied. The glob avoids silently dropping a
+# new module from the image.
+COPY *.ts ./
 
 ENV NODE_ENV=production \
     PORT=3000 \
