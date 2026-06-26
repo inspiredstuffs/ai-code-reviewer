@@ -38,6 +38,13 @@ Settings → Developer settings → **GitHub Apps** → New GitHub App.
 - After creating: note the **App ID**, generate a **private key** (.pem), then
   **Install** the App on your account and choose **All repositories**.
 
+> **Security — keep the App private.** Set the App to **"Only on this account"**
+> (not public/installable by others). The trigger is just a reviewer login, which
+> is public knowledge once this repo is open-source. If anyone could install the
+> App, they could open PRs requesting your reviewer login and loop them to drain
+> your Claude subscription. A private App is the primary defense; the service does
+> not yet enforce an installation/owner allowlist.
+
 ## 2. Get a Claude subscription token
 
 On any machine with a browser:

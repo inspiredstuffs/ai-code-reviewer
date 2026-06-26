@@ -28,6 +28,8 @@ import {
   buildContextPrompt,
   buildDiffPrompt,
   buildReviewHeader,
+  buildSubprocessEnv,
+  CLAUDE_ENV_ALLOWLIST,
   parsePositiveInt,
   parseReviewResult,
   shouldDeepReview,
@@ -48,6 +50,18 @@ const {
   BOT_NAME = "Alátùńwò AI",             // display name in the review header/notice
   PORT = "3000",
 } = process.env;
+
+// Auth must flow through CLAUDE_CODE_OAUTH_TOKEN (the subscription). A stray
+// ANTHROPIC_API_KEY would take precedence and silently move usage to metered API
+// billing, so refuse to start rather than bill the wrong way. (The reviewer
+// subprocess also never receives it — see CLAUDE_ENV_ALLOWLIST — but failing loud
+// at boot catches the misconfig before a single review runs.)
+if (process.env.ANTHROPIC_API_KEY) {
+  throw new Error(
+    "ANTHROPIC_API_KEY must not be set: it overrides CLAUDE_CODE_OAUTH_TOKEN and moves " +
+      "usage onto metered API billing. Unset it and use the subscription token instead.",
+  );
+}
 
 const now = (): string => new Date().toISOString();
 
@@ -176,12 +190,14 @@ function failureNotice(err: unknown): string {
  */
 function runClaude(prompt: string, opts: ClaudeRunOpts = {}): Promise<string> {
   return new Promise((resolve, reject) => {
-    // Inherit env so CLAUDE_CODE_OAUTH_TOKEN is picked up. ANTHROPIC_API_KEY must
-    // NOT be set, or it takes precedence over the subscription token.
+    // Hand the subprocess a minimal, allowlisted env — it's driven by untrusted PR
+    // content and its output is posted publicly, so it must not inherit the GitHub
+    // App private key, webhook secret, or ANTHROPIC_API_KEY. Only the subscription
+    // OAuth token (plus base infra vars) comes through.
     const child = spawn(
       "claude",
       buildClaudeArgs(CLAUDE_MODEL, opts),
-      { env: process.env, stdio: ["pipe", "pipe", "pipe"] },
+      { env: buildSubprocessEnv(process.env, CLAUDE_ENV_ALLOWLIST), stdio: ["pipe", "pipe", "pipe"] },
     );
 
     let stdout = "";
