@@ -22,11 +22,13 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
-# Application source: all root-level TypeScript modules (server.ts and its
-# siblings store.ts/review.ts/clone.ts). Run directly via tsx — no build step.
-# Tests live in test/ and are not copied. The glob avoids silently dropping a
-# new module from the image.
+# Application source: root-level TypeScript modules (server.ts and its siblings
+# store.ts/review.ts/clone.ts/provider.ts) plus the providers/ directory. Run
+# directly via tsx — no build step. Tests live in test/ and are not copied.
+# The globs avoid silently dropping a new module from the image; .dockerignore
+# keeps test/ and other noise out.
 COPY *.ts ./
+COPY providers/ ./providers/
 
 ENV NODE_ENV=production \
     PORT=3000 \

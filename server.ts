@@ -1,41 +1,37 @@
 /**
- * Claude PR Reviewer — GitHub App webhook service
+ * Alátùńwò AI Code Reviewer — GitHub App webhook service
  *
  * Reacts to `pull_request.review_requested`. When the requested reviewer is
- * REVIEWER_LOGIN, it pulls the PR diff, asks Claude (on your subscription, via
- * the Claude Code CLI in headless mode) to review it, and posts the result as a
- * single PR review with inline comments — Copilot-style.
+ * REVIEWER_LOGIN, it pulls the PR diff, asks the configured AI provider (Claude by
+ * default, on your subscription via its headless CLI) to review it, and posts the
+ * result as a single PR review with inline comments — Copilot-style.
  *
- * Auth: uses CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) so usage is
- * billed to your Claude subscription, not a metered API key.
+ * Auth is provider-specific (the Claude provider uses CLAUDE_CODE_OAUTH_TOKEN from
+ * `claude setup-token`, so usage is billed to your subscription, not a metered API
+ * key). The provider seam lives in provider.ts / providers/<name>.ts.
  *
  * Delivery & concurrency: GitHub fails a webhook delivery it can't deliver in
  * ~10s and retries it. Reviews take far longer than that, so we ack immediately
  * and run the review in the background, serialised through a queue so only one
- * `claude` subprocess runs at a time (predictable memory on a small box). Each
+ * provider subprocess runs at a time (predictable memory on a small box). Each
  * PR head SHA is reviewed at most once.
  */
 
 import express from "express";
 import { App, Octokit } from "octokit";
-import { spawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import PQueue from "p-queue";
 import { ReviewStore, type ReviewRef } from "./store.ts";
 import {
-  buildClaudeArgs,
   buildContextPrompt,
   buildDiffPrompt,
   buildReviewHeader,
-  buildSubprocessEnv,
-  CLAUDE_ENV_ALLOWLIST,
   parsePositiveInt,
-  parseReviewResult,
   shouldDeepReview,
-  type ClaudeRunOpts,
   type ReviewResult,
 } from "./review.ts";
+import { runReview, selectProvider } from "./provider.ts";
 import { clonePrHead, removeWorkdir } from "./clone.ts";
 
 const {
@@ -43,36 +39,29 @@ const {
   GITHUB_APP_PRIVATE_KEY,
   GITHUB_WEBHOOK_SECRET,
   REVIEWER_LOGIN,                       // login(s) that, when requested as reviewer, trigger a review
-  CLAUDE_MODEL = "claude-sonnet-4-6",
+  AI_PROVIDER,                          // which review CLI to drive; defaults to "claude"
   DATABASE_PATH = "./data/reviews.db",  // SQLite file; mount a volume here in prod
-  DEEP_REVIEW = "false",                // "true" → clone the PR so Claude can read surrounding files
+  DEEP_REVIEW = "false",                // "true" → clone the PR so the model can read surrounding files
   DEEP_REVIEW_MAX_TURNS = "8",          // turn budget for a deep review (diff-only is always 1)
   BOT_NAME = "Alátùńwò AI",             // display name in the review header/notice
   PORT = "3000",
 } = process.env;
 
-// Auth must flow through CLAUDE_CODE_OAUTH_TOKEN (the subscription). A stray
-// ANTHROPIC_API_KEY would take precedence and silently move usage to metered API
-// billing, so refuse to start rather than bill the wrong way. (The reviewer
-// subprocess also never receives it — see CLAUDE_ENV_ALLOWLIST — but failing loud
-// at boot catches the misconfig before a single review runs.)
-if (process.env.ANTHROPIC_API_KEY) {
-  throw new Error(
-    "ANTHROPIC_API_KEY must not be set: it overrides CLAUDE_CODE_OAUTH_TOKEN and moves " +
-      "usage onto metered API billing. Unset it and use the subscription token instead.",
-  );
-}
+// Pick the AI provider (Claude by default) and let it fail fast on bad config —
+// e.g. the Claude provider rejects a stray ANTHROPIC_API_KEY that would override
+// the subscription token. Provider-specific wiring lives in providers/<name>.ts.
+const provider = selectProvider(AI_PROVIDER);
+provider.validateConfig(process.env);
 
 const now = (): string => new Date().toISOString();
 
-// Deep reviews check out the PR branch and let Claude open surrounding files with
+// Deep reviews check out the PR branch and let the model open surrounding files with
 // READ-ONLY tools (no Bash/Write/Edit), so untrusted PR code can't be executed. Opt
 // in via DEEP_REVIEW=true; otherwise reviews stay diff-only.
 const deepReviewEnabled = DEEP_REVIEW.toLowerCase() === "true";
 const deepReviewMaxTurns = parsePositiveInt(DEEP_REVIEW_MAX_TURNS, "DEEP_REVIEW_MAX_TURNS");
-const DEEP_REVIEW_TOOLS = ["Read", "Grep", "Glob"] as const;
 
-// Accounts whose requested review triggers Claude. REVIEWER_LOGIN may be a single
+// Accounts whose requested review triggers a review. REVIEWER_LOGIN may be a single
 // login or a comma-separated list (e.g. "ayewobot,inspiredstuffs"), matched
 // case-insensitively.
 const REVIEWER_LOGINS = new Set(
@@ -114,15 +103,15 @@ const store = new ReviewStore(DATABASE_PATH);
 const orphaned = store.recoverOrphans(now());
 if (orphaned > 0) console.warn(`recovered ${orphaned} review(s) left pending by a previous run`);
 
-/** Diff-only review: Claude sees just the unified diff (single pass). */
+/** Diff-only review: the model sees just the unified diff (single pass). */
 async function reviewDiff(diff: string): Promise<ReviewResult> {
-  return parseReviewResult(await runClaude(buildDiffPrompt(diff)));
+  return runReview(provider, buildDiffPrompt(diff));
 }
 
 /**
- * Deep review: check out the PR head, let Claude open surrounding files with
- * read-only tools, then always clean up the working dir. Falls back to nothing —
- * the caller only routes here when DEEP_REVIEW is enabled.
+ * Deep review: check out the PR head, let the model open surrounding files with
+ * read-only tools, then always clean up the working dir. The caller only routes
+ * here when DEEP_REVIEW is enabled and an installation id is available.
  */
 async function reviewWithContext(
   ref: ReviewRef,
@@ -140,12 +129,11 @@ async function reviewWithContext(
       token,
     });
     console.log(`[${key}] PR head checked out; deep review (max-turns ${deepReviewMaxTurns})`);
-    const stdout = await runClaude(buildContextPrompt(diff, clonePath), {
+    return runReview(provider, buildContextPrompt(diff, clonePath), {
       maxTurns: deepReviewMaxTurns,
       addDir: clonePath,
-      allowedTools: DEEP_REVIEW_TOOLS,
+      deep: true,
     });
-    return parseReviewResult(stdout);
   } finally {
     if (clonePath) await removeWorkdir(clonePath);
   }
@@ -182,40 +170,6 @@ function failureNotice(err: unknown): string {
   ].join("\n");
 }
 
-/**
- * Run `claude -p` headlessly, feeding the prompt on stdin (NOT as an argv — a diff
- * can exceed the OS argument-length limit) and resolving with its stdout. Uses
- * spawn because promisified execFile silently ignores an `input` option, so the
- * prompt would never reach Claude.
- */
-function runClaude(prompt: string, opts: ClaudeRunOpts = {}): Promise<string> {
-  return new Promise((resolve, reject) => {
-    // Hand the subprocess a minimal, allowlisted env — it's driven by untrusted PR
-    // content and its output is posted publicly, so it must not inherit the GitHub
-    // App private key, webhook secret, or ANTHROPIC_API_KEY. Only the subscription
-    // OAuth token (plus base infra vars) comes through.
-    const child = spawn(
-      "claude",
-      buildClaudeArgs(CLAUDE_MODEL, opts),
-      { env: buildSubprocessEnv(process.env, CLAUDE_ENV_ALLOWLIST), stdio: ["pipe", "pipe", "pipe"] },
-    );
-
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => (stdout += chunk));
-    child.stderr.on("data", (chunk) => (stderr += chunk));
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code === 0) resolve(stdout);
-      else reject(new Error(`claude exited with code ${code}: ${stderr.trim().slice(0, 1000)}`));
-    });
-
-    // Surface stdin errors (e.g. EPIPE if Claude exits before reading it all).
-    child.stdin.on("error", reject);
-    child.stdin.end(prompt);
-  });
-}
-
 type ReviewTarget = {
   octokit: Octokit;
   ref: ReviewRef;            // owner/repo/pull_number/head_sha — the store key
@@ -226,7 +180,7 @@ type ReviewTarget = {
 };
 
 /**
- * Fetch the PR diff, review it on the Claude subscription, and post the result as
+ * Fetch the PR diff, review it via the configured provider, and post the result as
  * one review. Records the outcome in the store on success; throws on failure so the
  * caller can mark it failed (keeping the head SHA retryable on re-request).
  */

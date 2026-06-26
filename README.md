@@ -1,12 +1,18 @@
-# Claude PR Reviewer (GitHub App)
+# Alátùńwò AI Code Reviewer (GitHub App)
 
-A self-hosted GitHub App that reviews pull requests with Claude — Copilot-style.
-Install it once across your account/org; whenever a designated reviewer is
-requested on any PR, the App pulls the diff, runs Claude on your subscription,
-and posts inline review comments.
+A self-hosted GitHub App that reviews pull requests with an AI provider —
+Copilot-style. Install it once across your account/org; whenever a designated
+reviewer is requested on any PR, the App pulls the diff, runs the review on your
+subscription, and posts inline review comments.
 
 Unlike a GitHub Action, there is **no per-repo workflow file**. The App listens
 to webhooks for every repo it's installed on.
+
+**Providers.** The review engine is pluggable. **Claude** (via the Claude Code
+CLI) is the default and currently only provider; the seam (`provider.ts`,
+`providers/<name>.ts`) is built so another subscription CLI can be added without
+touching the GitHub/webhook machinery. Select one with `AI_PROVIDER` (default
+`claude`).
 
 ## How it works
 
@@ -18,7 +24,7 @@ PR: "Request review from <you>"
         │
         ├──►  fetch PR diff (installation token)
         │
-        ├──►  claude -p  (headless, CLAUDE_CODE_OAUTH_TOKEN → your subscription)
+        ├──►  AI_PROVIDER CLI (headless, on your subscription; Claude by default)
         │            returns JSON: { summary, comments[] }
         ▼
   POST a single PR review with inline comments; record the outcome
