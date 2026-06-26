@@ -12,6 +12,7 @@ import { spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { buildSubprocessEnv, GIT_ENV_ALLOWLIST } from "./review.ts";
 
 /** Build the base64 `AUTHORIZATION: basic …` header for an installation token. */
 export function installationAuthHeader(token: string): string {
@@ -50,13 +51,14 @@ export type ClonePrHeadOpts = {
 export async function clonePrHead(opts: ClonePrHeadOpts): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "pr-review-"));
   const url = `https://github.com/${opts.owner}/${opts.repo}.git`;
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
+  // Minimal env: base infra vars only (no service secrets — the token is injected
+  // via GIT_CONFIG_* below, never inherited from the parent environment).
+  const env = buildSubprocessEnv(process.env, GIT_ENV_ALLOWLIST, {
     GIT_TERMINAL_PROMPT: "0",         // never block on an interactive credential prompt
     GIT_CONFIG_COUNT: "1",
     GIT_CONFIG_KEY_0: "http.extraHeader",
     GIT_CONFIG_VALUE_0: installationAuthHeader(opts.token),
-  };
+  });
   try {
     await git(["init", "-q", dir], env);
     await git(["-C", dir, "remote", "add", "origin", url], env);
