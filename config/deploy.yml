@@ -11,7 +11,7 @@
 
 service: ai-code-reviewer
 # Image excludes the registry host; Kamal prefixes it from the registry block.
-image: inspiredstuffs/ai-code-reviewer
+image: <%= ENV.fetch('IMAGE') { raise 'IMAGE env required (ghcr namespace + name, e.g. <your-ghcr-namespace>/ai-code-reviewer)' } %>
 
 ssh:
   user: <%= ssh_user %>
@@ -35,13 +35,18 @@ env:
     - REVIEWER_LOGIN
     - CLAUDE_CODE_OAUTH_TOKEN
   clear:
+    # PORT and DATABASE_PATH are infra-coupled (proxy app_port / volume mount), so
+    # they stay fixed. The rest are tunables an operator may override per-deploy via
+    # .env.production; ERB falls back to these defaults when the var is unset.
     PORT: "3000"
-    CLAUDE_MODEL: "claude-sonnet-4-6"
     DATABASE_PATH: "/data/reviews.db"
-    # Deep reviews clone the PR so Claude can read surrounding files (read-only
-    # tools). Off by default; set to "true" to enable. See README "Deep reviews".
-    DEEP_REVIEW: "false"
-    DEEP_REVIEW_MAX_TURNS: "8"
+    AI_PROVIDER: <%= ENV.fetch('AI_PROVIDER', 'claude') %>
+    CLAUDE_MODEL: <%= ENV.fetch('CLAUDE_MODEL', 'claude-sonnet-4-6') %>
+    BOT_NAME: <%= ENV.fetch('BOT_NAME', 'Alátùńwò AI') %>
+    # Deep reviews clone the PR so the model can read surrounding files (read-only
+    # tools). Off by default; set DEEP_REVIEW=true to enable. See README "Deep reviews".
+    DEEP_REVIEW: <%= ENV.fetch('DEEP_REVIEW', 'false') %>
+    DEEP_REVIEW_MAX_TURNS: <%= ENV.fetch('DEEP_REVIEW_MAX_TURNS', '8') %>
 
 # Persist the SQLite review store across deploys. Without this the DB lives inside
 # the container and every redeploy wipes the idempotency/audit history. The image
