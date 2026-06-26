@@ -24,9 +24,10 @@ RUN npm ci --omit=dev
 
 # Application source: root-level TypeScript modules (server.ts and its siblings
 # store.ts/review.ts/clone.ts/provider.ts) plus the providers/ directory. Run
-# directly via tsx — no build step. Tests live in test/ and are not copied.
-# The globs avoid silently dropping a new module from the image; .dockerignore
-# keeps test/ and other noise out.
+# directly via tsx — no build step. We copy specific paths rather than `COPY .`,
+# so test/ and other non-runtime files are excluded by construction. Note `COPY
+# *.ts` matches only root-level modules, so each new source subdirectory needs its
+# own COPY line (below) or it's silently dropped from the image.
 COPY *.ts ./
 COPY providers/ ./providers/
 
