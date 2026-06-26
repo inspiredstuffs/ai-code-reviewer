@@ -1,8 +1,8 @@
 /**
- * Pure helpers for driving the `claude` CLI as a PR reviewer: prompt building,
- * argv construction, and parsing Claude Code's JSON envelope back into a review.
- * No side effects — kept separate from server.ts so they're unit-testable without
- * starting the HTTP server.
+ * Pure, provider-agnostic helpers for the reviewer: prompt building, the JSON
+ * output contract + parsing, review-header formatting, and minimal subprocess env
+ * construction. No side effects — unit-testable without starting the server or
+ * shelling out. Provider-specific CLI wiring lives in providers/<name>.ts.
  */
 
 export type ReviewComment = {
@@ -39,49 +39,20 @@ export function shouldDeepReview(envDefault: boolean, labels: readonly string[])
   return envDefault || labels.some((name) => name.toLowerCase() === DEEP_REVIEW_LABEL);
 }
 
-/** Options that shape a single `claude -p` invocation. */
-export type ClaudeRunOpts = {
-  maxTurns?: number;              // default 1 (single pass)
-  addDir?: string;               // grant tool access to this directory
-  allowedTools?: readonly string[]; // restrict tools (e.g. read-only for deep reviews)
-};
-
-/** Build the argv for `claude -p`. Separated out so the flag wiring is testable. */
-export function buildClaudeArgs(model: string, opts: ClaudeRunOpts = {}): string[] {
-  const args = [
-    "-p",
-    "--output-format", "json",
-    "--max-turns", String(opts.maxTurns ?? 1),
-    "--model", model,
-  ];
-  if (opts.addDir) args.push("--add-dir", opts.addDir);
-  if (opts.allowedTools && opts.allowedTools.length > 0) {
-    args.push("--allowedTools", opts.allowedTools.join(","));
-  }
-  return args;
-}
-
 /**
  * Non-secret process vars safe to forward to any subprocess: enough to be found on
  * PATH, locate config under HOME, write temp files, render UTF-8 output, and reach
  * the network through a proxy / custom CA. Deliberately excludes everything else so
- * service secrets are default-denied rather than inherited wholesale.
+ * service secrets are default-denied rather than inherited wholesale. Providers
+ * extend this with the one token they need (see providers/<name>.ts).
  */
-const BASE_ENV_ALLOWLIST = [
+export const BASE_ENV_ALLOWLIST = [
   "PATH", "HOME", "TMPDIR", "USER", "SHELL",
   "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE", "TERM",
   "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS",
   "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
   "http_proxy", "https_proxy", "no_proxy",
 ] as const;
-
-/**
- * Env allowlist for the `claude` reviewer subprocess. It is driven by attacker-
- * controlled diff/file content and its output is posted publicly, so it must NOT
- * inherit the GitHub App private key, webhook secret, or ANTHROPIC_API_KEY. The
- * subscription OAuth token is the only secret it legitimately needs.
- */
-export const CLAUDE_ENV_ALLOWLIST = [...BASE_ENV_ALLOWLIST, "CLAUDE_CODE_OAUTH_TOKEN"] as const;
 
 /**
  * Env allowlist for the `git` clone subprocess. It needs no secret from the
@@ -162,12 +133,10 @@ export function stripFences(s: string): string {
 }
 
 /**
- * Parse `claude --output-format json` stdout into a ReviewResult. Claude Code wraps
- * the model's reply in an envelope ({ result, ... }); the reply itself is the review
- * JSON, possibly fenced.
+ * Parse the model's text reply (the review JSON, possibly fenced) into a
+ * ReviewResult. This is the shared output contract; unwrapping any provider-specific
+ * stdout envelope into this text happens first, in the provider's parseReply.
  */
-export function parseReviewResult(stdout: string): ReviewResult {
-  const envelope = JSON.parse(stdout);
-  const text = String(envelope.result ?? "").trim();
+export function parseReviewJson(text: string): ReviewResult {
   return JSON.parse(stripFences(text)) as ReviewResult;
 }

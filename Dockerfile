@@ -22,11 +22,14 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
-# Application source: all root-level TypeScript modules (server.ts and its
-# siblings store.ts/review.ts/clone.ts). Run directly via tsx — no build step.
-# Tests live in test/ and are not copied. The glob avoids silently dropping a
-# new module from the image.
+# Application source: root-level TypeScript modules (server.ts and its siblings
+# store.ts/review.ts/clone.ts/provider.ts) plus the providers/ directory. Run
+# directly via tsx — no build step. We copy specific paths rather than `COPY .`,
+# so test/ and other non-runtime files are excluded by construction. Note `COPY
+# *.ts` matches only root-level modules, so each new source subdirectory needs its
+# own COPY line (below) or it's silently dropped from the image.
 COPY *.ts ./
+COPY providers/ ./providers/
 
 ENV NODE_ENV=production \
     PORT=3000 \

@@ -1,15 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  buildClaudeArgs,
   buildContextPrompt,
   buildDiffPrompt,
   buildReviewHeader,
   buildSubprocessEnv,
-  CLAUDE_ENV_ALLOWLIST,
   GIT_ENV_ALLOWLIST,
   parsePositiveInt,
-  parseReviewResult,
+  parseReviewJson,
   shouldDeepReview,
   stripFences,
 } from "../review.ts";
@@ -62,33 +60,6 @@ test("shouldDeepReview: env default on applies to every PR regardless of labels"
   assert.equal(shouldDeepReview(true, ["chore"]), true);
 });
 
-test("buildClaudeArgs defaults to a single diff-only pass", () => {
-  const args = buildClaudeArgs("claude-sonnet-4-6");
-  assert.deepEqual(args, [
-    "-p", "--output-format", "json", "--max-turns", "1", "--model", "claude-sonnet-4-6",
-  ]);
-  assert.ok(!args.includes("--add-dir"), "no working dir by default");
-  assert.ok(!args.includes("--allowedTools"), "no tool restriction by default");
-});
-
-test("buildClaudeArgs wires deep-review options (dir + read-only tools)", () => {
-  const args = buildClaudeArgs("opus", {
-    maxTurns: 8,
-    addDir: "/tmp/clone",
-    allowedTools: ["Read", "Grep", "Glob"],
-  });
-  assert.equal(args[args.indexOf("--max-turns") + 1], "8");
-  assert.equal(args[args.indexOf("--add-dir") + 1], "/tmp/clone");
-  assert.equal(args[args.indexOf("--allowedTools") + 1], "Read,Grep,Glob");
-  // Read-only: nothing that could execute or mutate repo code.
-  assert.ok(!args.join(" ").match(/Bash|Write|Edit/), "deep review tools stay read-only");
-});
-
-test("an empty allowedTools list is omitted, not passed as an empty flag", () => {
-  const args = buildClaudeArgs("m", { allowedTools: [] });
-  assert.ok(!args.includes("--allowedTools"));
-});
-
 test("both prompts embed the diff and the JSON output contract", () => {
   const diff = "diff --git a/x b/x\n+const y = 1;";
   for (const prompt of [buildDiffPrompt(diff), buildContextPrompt(diff, "/tmp/clone")]) {
@@ -130,23 +101,6 @@ test("buildSubprocessEnv merges extra vars, which override the allowlisted sourc
   assert.equal(env.GIT_TERMINAL_PROMPT, "0", "extra var added");
 });
 
-test("the claude subprocess env carries the OAuth token but never the service secrets", () => {
-  const source = {
-    PATH: "/usr/bin",
-    HOME: "/home/app",
-    CLAUDE_CODE_OAUTH_TOKEN: "claude_oauth_real",
-    GITHUB_APP_PRIVATE_KEY: "-----BEGIN RSA PRIVATE KEY-----",
-    GITHUB_WEBHOOK_SECRET: "whsec_real",
-    GITHUB_APP_ID: "123456",
-    ANTHROPIC_API_KEY: "sk-ant-should-never-leak",
-  };
-  const env = buildSubprocessEnv(source, CLAUDE_ENV_ALLOWLIST);
-  assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, "claude_oauth_real", "subscription token forwarded");
-  for (const secret of ["GITHUB_APP_PRIVATE_KEY", "GITHUB_WEBHOOK_SECRET", "ANTHROPIC_API_KEY"]) {
-    assert.ok(!(secret in env), `${secret} must not reach the reviewer subprocess`);
-  }
-});
-
 test("the git subprocess env never carries the Claude token or service secrets", () => {
   const source = {
     PATH: "/usr/bin",
@@ -160,12 +114,11 @@ test("the git subprocess env never carries the Claude token or service secrets",
   assert.equal(env.PATH, "/usr/bin", "git still gets PATH to be found/run");
 });
 
-test("parseReviewResult unwraps the Claude Code envelope and parses (fenced) JSON", () => {
-  const envelope = JSON.stringify({
-    result: '```json\n{"summary":"looks fine","comments":[]}\n```',
-    other: "ignored",
-  });
-  const result = parseReviewResult(envelope);
-  assert.equal(result.summary, "looks fine");
-  assert.deepEqual(result.comments, []);
+test("parseReviewJson parses the (possibly fenced) review JSON text", () => {
+  assert.deepEqual(
+    parseReviewJson('```json\n{"summary":"looks fine","comments":[]}\n```'),
+    { summary: "looks fine", comments: [] },
+  );
+  const withComment = parseReviewJson('{"summary":"s","comments":[{"path":"a.ts","line":3,"body":"x"}]}');
+  assert.equal(withComment.comments[0].path, "a.ts");
 });
