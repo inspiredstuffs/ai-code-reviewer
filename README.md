@@ -30,6 +30,18 @@ PR: "Request review from <you>"
   POST a single PR review with inline comments; record the outcome
 ```
 
+## What the review covers
+
+The reviewer is **language-agnostic** — it detects the stack from the diff and
+applies that language's idioms, so the same rubric works for any codebase. Each
+review weighs correctness/logic bugs, edge cases and error handling, security,
+performance, API/contract changes, missing tests, and maintainability — and
+deliberately skips pure formatting a linter already enforces. The PR title and
+description are fed in (as untrusted data) so it can judge whether the change does
+what it claims. Findings are graded `blocker` / `warn` / `info`, and the summary
+leads with what matters. For deeper, context-aware comments, see
+[Deep reviews](#deep-reviews-optional).
+
 ## 1. Create the GitHub App
 
 Settings → Developer settings → **GitHub Apps** → New GitHub App.
