@@ -18,9 +18,11 @@ import { join } from "node:path";
 import { buildSubprocessEnv, GIT_ENV_ALLOWLIST } from "./review.ts";
 
 /**
- * Build an HTTP `AUTHORIZATION: basic …` header from a username + token. The token is
- * base64-encoded (not plaintext) so a value that leaks the header doesn't directly
- * expose the token string. GitHub uses user `x-access-token`; GitLab uses `oauth2`.
+ * Build an HTTP `AUTHORIZATION: basic …` header from a username + token. GitHub uses
+ * user `x-access-token`; GitLab uses `oauth2`. base64 here is HTTP Basic's encoding,
+ * NOT protection — it's trivially reversible, so the returned value is a secret and
+ * must never be logged. (We keep it out of the clone URL and argv for that reason; it
+ * travels only via a GIT_CONFIG_* env var.)
  */
 export function basicAuthHeader(user: string, token: string): string {
   const basic = Buffer.from(`${user}:${token}`).toString("base64");

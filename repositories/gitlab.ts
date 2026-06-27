@@ -173,8 +173,10 @@ export function idsWithout(ids: number[], botUserId: number): number[] {
  * The PUT body that removes the bot from the MR — only the field(s) the bot is
  * actually in. A bot added as both reviewer and assignee is cleared from both (the
  * trigger field alone would leave it lingering in the other). `reviewer_ids`/
- * `assignee_ids` are full-replace, so we send the current set minus the bot, never an
- * empty list (which would wipe everyone). Returns `{}` when the bot is in neither.
+ * `assignee_ids` are full-replace, so we send the current set minus the bot. That set
+ * is `[]` exactly when the bot was the sole reviewer/assignee, which is correct — it
+ * clears only the bot (who was the whole set), not other people. Returns `{}` when the
+ * bot is in neither field, so the caller can skip the PUT entirely.
  */
 export function unassignBotJson(
   reviewerIds: number[],
@@ -199,8 +201,10 @@ function tokenMatches(received: string | undefined, expected: string): boolean {
 export function createGitlabProvider(env: NodeJS.ProcessEnv): RepositoryProvider {
   const token = env.GITLAB_TOKEN ?? "";
   const webhookSecret = env.GITLAB_WEBHOOK_SECRET ?? "";
+  // Base URL with no /api/v4 suffix (we add it per-call). It doubles as the git base
+  // for clone URLs, so a subpath-hosted instance (e.g. https://host/gitlab) is honored
+  // verbatim rather than collapsed to its origin.
   const apiUrl = (env.GITLAB_API_URL?.trim() || "https://gitlab.com").replace(/\/+$/, "");
-  const host = new URL(apiUrl).origin; // git host for clone URLs (apiUrl has no /api/v4 suffix)
 
   // Resolved in init() via GET /user; -1 never matches a real reviewer id.
   let botUserId = -1;
@@ -244,8 +248,10 @@ export function createGitlabProvider(env: NodeJS.ProcessEnv): RepositoryProvider
         throw new Error(`GET /api/v4${path} failed: ${resp.status} ${detail.slice(0, 300)}`);
       }
       out.push(...((await resp.json()) as unknown[]));
+      // GitLab signals "no more pages" with an empty x-next-page; guard "0" too so a
+      // stray sentinel can't drive page=0 (an invalid request / potential loop).
       const next = resp.headers.get("x-next-page");
-      if (!next) break;
+      if (!next || next === "0") break;
       page = Number(next);
     }
     return out;
@@ -363,7 +369,7 @@ export function createGitlabProvider(env: NodeJS.ProcessEnv): RepositoryProvider
       // the password; `merge-requests/<iid>/head` is fork-agnostic like GitHub's
       // `pull/<n>/head`. The token rides the auth header, never the URL.
       return cloneRef({
-        cloneUrl: `${host}/${req.ref.owner}/${req.ref.repo}.git`,
+        cloneUrl: `${apiUrl}/${req.ref.owner}/${req.ref.repo}.git`,
         fetchRef: `merge-requests/${ctx.mrIid}/head`,
         authHeader: basicAuthHeader("oauth2", token),
       });
