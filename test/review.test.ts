@@ -101,7 +101,10 @@ test("prompts omit the intent block when empty, and render a null body as (none)
 test("a huge PR description is truncated so it can't dominate the prompt", () => {
   const prompt = buildDiffPrompt("d", { title: "t", body: "x".repeat(20000) });
   assert.ok(/truncated/i.test(prompt), "truncation marker present");
-  assert.ok(prompt.length < 12000, "prompt stays bounded");
+  // Body is capped at MAX_PR_BODY (5000); with the fixed instructions the whole prompt
+  // sits under ~8k. A broken cap would balloon this toward the 20k input — tripwire on
+  // both truncation failing and the instruction constants quietly bloating.
+  assert.ok(prompt.length < 8500, `prompt should stay bounded, got ${prompt.length}`);
 });
 
 test("prompts include an untrusted-input guardrail against prompt injection", () => {
