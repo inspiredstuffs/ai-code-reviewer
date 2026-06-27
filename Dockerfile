@@ -23,13 +23,14 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
 # Application source: root-level TypeScript modules (server.ts and its siblings
-# store.ts/review.ts/clone.ts/provider.ts) plus the providers/ directory. Run
-# directly via tsx — no build step. We copy specific paths rather than `COPY .`,
-# so test/ and other non-runtime files are excluded by construction. Note `COPY
-# *.ts` matches only root-level modules, so each new source subdirectory needs its
-# own COPY line (below) or it's silently dropped from the image.
+# store.ts/review.ts/clone.ts/provider.ts/repository.ts) plus the providers/ (AI) and
+# repositories/ (code-host) directories. Run directly via tsx — no build step. We copy
+# specific paths rather than `COPY .`, so test/ and other non-runtime files are excluded
+# by construction. Note `COPY *.ts` matches only root-level modules, so each new source
+# subdirectory needs its own COPY line (below) or it's silently dropped from the image.
 COPY *.ts ./
 COPY providers/ ./providers/
+COPY repositories/ ./repositories/
 
 ENV NODE_ENV=production \
     PORT=3000 \
