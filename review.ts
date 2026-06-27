@@ -152,19 +152,28 @@ ${prIntentBlock(intent)}DIFF:
 ${diff}`;
 }
 
-/** Diff-only review prompt — the model sees just the unified diff (plus PR intent). */
-export function buildDiffPrompt(diff: string, intent: PrIntent = {}): string {
-  return composePrompt("You are reviewing a GitHub pull request from the unified diff below.", intent, diff);
+/**
+ * Diff-only review prompt — the model sees just the unified diff (plus the change's
+ * stated intent). `changeNoun` is the host's term for the unit under review ("pull
+ * request" on GitHub, "merge request" on GitLab) so the prompt isn't host-specific.
+ */
+export function buildDiffPrompt(diff: string, intent: PrIntent = {}, changeNoun = "pull request"): string {
+  return composePrompt(`You are reviewing a ${changeNoun} from the unified diff below.`, intent, diff);
 }
 
 /**
- * Deep-review prompt — the repo is checked out at `repoPath` (PR head), so the model
- * can open surrounding files for context. Output contract is identical; comments
- * still only land on diff lines.
+ * Deep-review prompt — the repo is checked out at `repoPath` (the change's head), so
+ * the model can open surrounding files for context. Output contract is identical;
+ * comments still only land on diff lines. `changeNoun` matches the host (see above).
  */
-export function buildContextPrompt(diff: string, repoPath: string, intent: PrIntent = {}): string {
-  const role = `You are reviewing a GitHub pull request. The repository is checked out at
-${repoPath} at the PR's head commit. Open surrounding files there for context
+export function buildContextPrompt(
+  diff: string,
+  repoPath: string,
+  intent: PrIntent = {},
+  changeNoun = "pull request",
+): string {
+  const role = `You are reviewing a ${changeNoun}. The repository is checked out at
+${repoPath} at the change's head commit. Open surrounding files there for context
 (definitions, call sites, tests) before commenting, but only comment on lines in the diff.`;
   return composePrompt(role, intent, diff);
 }
