@@ -83,7 +83,9 @@ export async function runReview(
  * deploys are unaffected. Unknown names fail loudly rather than silently no-op.
  */
 export function selectProvider(name: string | undefined): ReviewProvider {
-  const key = (name ?? "claude").trim().toLowerCase();
+  // Treat unset, empty, or whitespace-only as the default (an unset injected var
+  // arrives as "", which `?? "claude"` would not catch).
+  const key = (name?.trim() || "claude").toLowerCase();
   switch (key) {
     case "claude":
       return createClaudeProvider(process.env);

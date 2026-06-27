@@ -8,6 +8,11 @@ test("selectRepositoryProvider returns GitHub by default and for 'github'", () =
   assert.equal(selectRepositoryProvider("  GitHub  ").name, "github", "trimmed + case-insensitive");
 });
 
+test("selectRepositoryProvider treats empty/whitespace as the default (injected-but-unset secret)", () => {
+  assert.equal(selectRepositoryProvider("").name, "github", "empty string → default, not a crash");
+  assert.equal(selectRepositoryProvider("   ").name, "github", "whitespace-only → default");
+});
+
 test("selectRepositoryProvider returns GitLab for 'gitlab'", () => {
   assert.equal(selectRepositoryProvider("gitlab").name, "gitlab");
 });

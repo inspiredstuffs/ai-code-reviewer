@@ -59,6 +59,7 @@ test("selectProvider returns the Claude provider for 'claude' and by default", (
   assert.equal(selectProvider("claude").name, "claude");
   assert.equal(selectProvider(undefined).name, "claude");
   assert.equal(selectProvider("  CLAUDE  ").name, "claude", "trimmed + case-insensitive");
+  assert.equal(selectProvider("").name, "claude", "empty string → default, not a crash");
 });
 
 test("selectProvider fails loudly on an unknown provider name", () => {

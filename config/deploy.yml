@@ -29,9 +29,11 @@ builder:
 
 env:
   secret:
-    # GitHub provider vars (REPO_PROVIDER=github) and GitLab provider vars
-    # (REPO_PROVIDER=gitlab). One host per deploy; the other host's vars resolve empty
-    # and are unused. secrets-common references them all from the shell.
+    # Host selector + both providers' credentials, sourced from the shell via
+    # secrets-common. REPO_PROVIDER picks the host (github|gitlab); one host per deploy,
+    # so the other host's vars resolve empty and are unused. An unset REPO_PROVIDER
+    # arrives as "" and the app defaults it to "github" (see selectRepositoryProvider).
+    - REPO_PROVIDER
     - GITHUB_APP_ID
     - GITHUB_APP_PRIVATE_KEY
     - GITHUB_WEBHOOK_SECRET
@@ -45,8 +47,6 @@ env:
     # .env.production; ERB falls back to these defaults when the var is unset.
     PORT: "3000"
     DATABASE_PATH: "/data/reviews.db"
-    # Which code host to talk to: "github" (default) or "gitlab".
-    REPO_PROVIDER: <%= ENV.fetch('REPO_PROVIDER', 'github') %>
     # GitLab API base (REPO_PROVIDER=gitlab); ignored by the GitHub provider.
     GITLAB_API_URL: <%= ENV.fetch('GITLAB_API_URL', 'https://gitlab.com') %>
     AI_PROVIDER: <%= ENV.fetch('AI_PROVIDER', 'claude') %>

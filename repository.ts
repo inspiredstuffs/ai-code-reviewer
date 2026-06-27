@@ -82,7 +82,9 @@ export function headerValue(headers: IncomingHttpHeaders, name: string): string 
  * no-op.
  */
 export function selectRepositoryProvider(name: string | undefined): RepositoryProvider {
-  const key = (name ?? "github").trim().toLowerCase();
+  // Treat unset, empty, or whitespace-only as the default — a secret-injected
+  // REPO_PROVIDER that's unset in the shell arrives as "" (not undefined).
+  const key = (name?.trim() || "github").toLowerCase();
   switch (key) {
     case "github":
       return createGithubProvider(process.env);
