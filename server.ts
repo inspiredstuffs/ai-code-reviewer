@@ -29,6 +29,7 @@ import {
   buildReviewHeader,
   parsePositiveInt,
   shouldDeepReview,
+  type PrIntent,
   type ReviewResult,
 } from "./review.ts";
 import { runReview, selectProvider } from "./provider.ts";
@@ -103,9 +104,9 @@ const store = new ReviewStore(DATABASE_PATH);
 const orphaned = store.recoverOrphans(now());
 if (orphaned > 0) console.warn(`recovered ${orphaned} review(s) left pending by a previous run`);
 
-/** Diff-only review: the model sees just the unified diff (single pass). */
-async function reviewDiff(diff: string): Promise<ReviewResult> {
-  return runReview(provider, buildDiffPrompt(diff));
+/** Diff-only review: the model sees the unified diff plus the PR's stated intent. */
+async function reviewDiff(diff: string, intent: PrIntent): Promise<ReviewResult> {
+  return runReview(provider, buildDiffPrompt(diff, intent));
 }
 
 /**
@@ -118,6 +119,7 @@ async function reviewWithContext(
   installationId: number,
   diff: string,
   key: string,
+  intent: PrIntent,
 ): Promise<ReviewResult> {
   const token = await mintInstallationToken(installationId, ref.repo);
   let clonePath: string | undefined;
@@ -129,7 +131,7 @@ async function reviewWithContext(
       token,
     });
     console.log(`[${key}] PR head checked out; deep review (max-turns ${deepReviewMaxTurns})`);
-    return runReview(provider, buildContextPrompt(diff, clonePath), {
+    return runReview(provider, buildContextPrompt(diff, clonePath, intent), {
       maxTurns: deepReviewMaxTurns,
       addDir: clonePath,
       deep: true,
@@ -177,6 +179,7 @@ type ReviewTarget = {
   reviewer: string;          // the requested login to clear once the review is posted
   deep: boolean;             // run a clone-based deep review (env default or PR label)
   installationId?: number;   // needed to mint a token for deep (clone-based) reviews
+  intent: PrIntent;          // PR title/body, so the review can judge intent vs. change
 };
 
 /**
@@ -184,7 +187,7 @@ type ReviewTarget = {
  * one review. Records the outcome in the store on success; throws on failure so the
  * caller can mark it failed (keeping the head SHA retryable on re-request).
  */
-async function processReview({ octokit, ref, key, reviewer, deep, installationId }: ReviewTarget): Promise<void> {
+async function processReview({ octokit, ref, key, reviewer, deep, installationId, intent }: ReviewTarget): Promise<void> {
   const { owner, repo, pull_number } = ref;
   // 1. Fetch the PR as a unified diff.
   const diffResp = await octokit.request("GET /repos/{owner}/{repo}/pulls/{pull_number}", {
@@ -202,9 +205,9 @@ async function processReview({ octokit, ref, key, reviewer, deep, installationId
   let didDeepReview = false;
   if (deep && installationId !== undefined) {
     didDeepReview = true;
-    result = await reviewWithContext(ref, installationId, diff, key);
+    result = await reviewWithContext(ref, installationId, diff, key, intent);
   } else {
-    result = await reviewDiff(diff);
+    result = await reviewDiff(diff, intent);
   }
 
   const comments = (result.comments ?? [])
@@ -288,6 +291,9 @@ ghApp.webhooks.on("pull_request.review_requested", async ({ octokit, payload }) 
   const labels = payload.pull_request.labels?.map((l) => l.name) ?? [];
   const deep = shouldDeepReview(deepReviewEnabled, labels);
 
+  // The PR's stated intent, so the review can judge "does the change do what it claims?".
+  const intent: PrIntent = { title: payload.pull_request.title, body: payload.pull_request.body };
+
   // Idempotency: reserve this head SHA. A `false` return means it's already posted
   // or in flight — skip. Reserving synchronously (before any await) also dedupes
   // GitHub's redelivery of webhooks we don't ack in time.
@@ -302,7 +308,7 @@ ghApp.webhooks.on("pull_request.review_requested", async ({ octokit, payload }) 
   // Hand the review to the queue and return immediately, so the webhook is acked well
   // inside GitHub's ~10s window. The work runs in the background, one review at a time.
   void queue
-    .add(() => processReview({ octokit, ref, key, reviewer: requested, deep, installationId }))
+    .add(() => processReview({ octokit, ref, key, reviewer: requested, deep, installationId, intent }))
     .catch(async (err) => {
       // Mark failed so a later re-request can retry this exact head SHA.
       store.markFailed(ref, err instanceof Error ? err.message : String(err), now());
