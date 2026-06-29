@@ -32,6 +32,7 @@ export function createClaudeCliConfig(env: NodeJS.ProcessEnv): CliProviderConfig
     name: "claude",
     command: "claude",
     envAllowlist: CLAUDE_ENV_ALLOWLIST,
+    sourceEnv: env,
 
     validateConfig(e: NodeJS.ProcessEnv): void {
       // Auth must flow through CLAUDE_CODE_OAUTH_TOKEN (the subscription). A stray

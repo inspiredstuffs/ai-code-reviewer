@@ -118,8 +118,8 @@ Codex runtime from `@openai/codex`, which is installed as a production dependenc
 you do not need to install a separate global `codex` binary for this service.
 
 For deep reviews, the service starts the SDK thread with the checked-out PR/MR
-head as the working directory and an additional directory. User config loads by
-default; set `CODEX_MODEL=gpt-5.5` to override the configured model.
+head as the working directory. User config loads by default; set
+`CODEX_MODEL=gpt-5.5` to override the configured model.
 
 Auth precedence:
 
@@ -130,6 +130,14 @@ Auth precedence:
   Claude `CLAUDE_CODE_OAUTH_TOKEN` setup.
 - If none are set, Codex falls back to the default `~/.codex` path, so the host
   must already be logged in with `codex login`.
+
+Supported Codex tunables:
+
+- `CODEX_MODEL`: model override for the review thread.
+- `CODEX_REASONING_EFFORT`: one of `minimal`, `low`, `medium`, `high`, `xhigh`.
+- `CODEX_WEB_SEARCH_MODE`: one of `disabled`, `cached`, `live`; deploys default
+  this to `disabled`.
+- `CODEX_BASE_URL`: alternate OpenAI-compatible API base URL.
 
 The Codex docs call this token `CODEX_ACCESS_TOKEN`. For ephemeral automation,
 store it as an environment secret. For persistent cached CLI auth, seed the host
@@ -143,7 +151,8 @@ Safety: Codex runs with a read-only sandbox, approval mode `never`, and structur
 output schema support. The SDK subprocess env forwards only base infra vars plus
 Codex auth/config vars (`CODEX_HOME`, `CODEX_SQLITE_HOME`, `CODEX_ACCESS_TOKEN`,
 `CODEX_API_KEY`, `CODEX_CA_CERTIFICATE`, `RUST_LOG`); repository provider secrets
-and Claude/Anthropic secrets are not forwarded.
+and Claude/Anthropic secrets are not forwarded. `CODEX_HOME` and
+`CODEX_SQLITE_HOME` remain Codex runtime details, not app-level configuration.
 
 ## 3. Configure
 

@@ -83,13 +83,28 @@ test("runReview accepts a high-level provider without CLI fields", async () => {
 });
 
 test("CLI-backed providers parse stdout through the shared review contract", async () => {
+  let seenMaxTurns: number | undefined;
   const provider = createCliBackedProvider({
     name: "mock",
     command: process.execPath,
-    envAllowlist: ["PATH"],
-    buildArgs: () => ["-e", "process.stdin.resume(); process.stdin.on('end', () => console.log(JSON.stringify({ result: '{\"summary\":\"ok\",\"comments\":[]}' })))"],
+    sourceEnv: { PATH: process.env.PATH ?? "", TEST_REVIEW_ENV: "from-source" },
+    envAllowlist: ["PATH", "TEST_REVIEW_ENV"],
+    buildArgs: (opts) => {
+      seenMaxTurns = opts.maxTurns;
+      return ["-e", `
+        let input = "";
+        process.stdin.setEncoding("utf8");
+        process.stdin.on("data", (chunk) => input += chunk);
+        process.stdin.on("end", () => {
+          console.log(JSON.stringify({
+            result: JSON.stringify({ summary: process.env.TEST_REVIEW_ENV + ":" + input, comments: [] }),
+          }));
+        });
+      `];
+    },
     parseReply: (stdout) => JSON.parse(stdout).result,
   });
 
-  assert.deepEqual(await provider.run("ignored"), { summary: "ok", comments: [] });
+  assert.deepEqual(await provider.run("review prompt", { maxTurns: 3 }), { summary: "from-source:review prompt", comments: [] });
+  assert.equal(seenMaxTurns, 3);
 });

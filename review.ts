@@ -157,11 +157,32 @@ export function stripFences(s: string): string {
   return s.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
 }
 
+function isReviewComment(value: unknown): value is ReviewComment {
+  if (!value || typeof value !== "object") return false;
+  const c = value as Partial<ReviewComment>;
+  return typeof c.path === "string"
+    && Number.isInteger(c.line)
+    && typeof c.body === "string"
+    && (c.side === undefined || c.side === "RIGHT" || c.side === "LEFT")
+    && (c.severity === undefined || c.severity === "info" || c.severity === "warn" || c.severity === "blocker");
+}
+
 /**
  * Parse the model's text reply (the review JSON, possibly fenced) into a
  * ReviewResult. This is the shared output contract; providers unwrap any
  * provider-specific response envelope before calling this.
  */
 export function parseReviewJson(text: string): ReviewResult {
-  return JSON.parse(stripFences(text)) as ReviewResult;
+  const parsed: unknown = JSON.parse(stripFences(text));
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Review response must be a JSON object.");
+  }
+  const result = parsed as Partial<ReviewResult>;
+  if (typeof result.summary !== "string" || !Array.isArray(result.comments)) {
+    throw new Error("Review response must include a string summary and comments array.");
+  }
+  if (!result.comments.every(isReviewComment)) {
+    throw new Error("Review response comments must include path, integer line, body, and valid optional side/severity.");
+  }
+  return { summary: result.summary, comments: result.comments };
 }

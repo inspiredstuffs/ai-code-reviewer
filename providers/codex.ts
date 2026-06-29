@@ -1,4 +1,11 @@
-import { Codex, type CodexOptions, type ThreadOptions, type TurnOptions } from "@openai/codex-sdk";
+import {
+  Codex,
+  type CodexOptions,
+  type ModelReasoningEffort,
+  type ThreadOptions,
+  type TurnOptions,
+  type WebSearchMode,
+} from "@openai/codex-sdk";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +15,8 @@ import { BASE_ENV_ALLOWLIST, buildSubprocessEnv } from "../runtime/spawn.ts";
 import schema from "./codex-review.schema.json" with { type: "json" };
 
 const DEFAULT_TIMEOUT_MS_PER_TURN = 60_000;
+const REASONING_EFFORTS = new Set(["minimal", "low", "medium", "high", "xhigh"]);
+const WEB_SEARCH_MODES = new Set(["disabled", "cached", "live"]);
 
 export const CODEX_ENV_ALLOWLIST = [
   ...BASE_ENV_ALLOWLIST,
@@ -42,21 +51,45 @@ function codexEnvAllowlist(env: NodeJS.ProcessEnv): readonly string[] {
 function codexClientOptions(env: NodeJS.ProcessEnv): CodexOptions {
   const subprocessEnv = buildSubprocessEnv(env, codexEnvAllowlist(env));
   const apiKey = env.CODEX_API_KEY?.trim();
+  const baseUrl = env.CODEX_BASE_URL?.trim();
 
   return {
     env: subprocessEnv,
     ...(apiKey ? { apiKey } : {}),
+    ...(baseUrl ? { baseUrl } : {}),
   };
+}
+
+function optionalReasoningEffort(value?: string): ModelReasoningEffort | undefined {
+  const normalized = value?.trim();
+  if (!normalized) return undefined;
+  if (!REASONING_EFFORTS.has(normalized)) {
+    throw new Error("CODEX_REASONING_EFFORT must be one of: minimal, low, medium, high, xhigh.");
+  }
+  return normalized as ModelReasoningEffort;
+}
+
+function optionalWebSearchMode(value?: string): WebSearchMode | undefined {
+  const normalized = value?.trim();
+  if (!normalized) return undefined;
+  if (!WEB_SEARCH_MODES.has(normalized)) {
+    throw new Error("CODEX_WEB_SEARCH_MODE must be one of: disabled, cached, live.");
+  }
+  return normalized as WebSearchMode;
 }
 
 function threadOptions(env: NodeJS.ProcessEnv, opts: ReviewRunOpts, diffOnlyDir?: string): ThreadOptions {
   const model = env.CODEX_MODEL?.trim();
+  const modelReasoningEffort = optionalReasoningEffort(env.CODEX_REASONING_EFFORT);
+  const webSearchMode = optionalWebSearchMode(env.CODEX_WEB_SEARCH_MODE);
   return {
     sandboxMode: "read-only",
     approvalPolicy: "never",
     ...(model ? { model } : {}),
+    ...(modelReasoningEffort ? { modelReasoningEffort } : {}),
+    ...(webSearchMode ? { webSearchMode } : {}),
     ...(opts.addDir
-      ? { workingDirectory: opts.addDir, additionalDirectories: [opts.addDir] }
+      ? { workingDirectory: opts.addDir }
       : { workingDirectory: diffOnlyDir, skipGitRepoCheck: true }),
   };
 }
@@ -80,6 +113,8 @@ export function createCodexProvider(env: NodeJS.ProcessEnv, deps: CodexProviderD
             "--profile, which the SDK does not expose. Configure model/auth directly instead.",
         );
       }
+      optionalReasoningEffort(e.CODEX_REASONING_EFFORT);
+      optionalWebSearchMode(e.CODEX_WEB_SEARCH_MODE);
       if (!hasExplicitAuth && !hasConfiguredHome) {
         console.warn(
           "AI_PROVIDER=codex without CODEX_API_KEY, CODEX_ACCESS_TOKEN, or CODEX_HOME; " +
@@ -99,7 +134,7 @@ export function createCodexProvider(env: NodeJS.ProcessEnv, deps: CodexProviderD
         });
         return parseReviewJson(turn.finalResponse);
       } finally {
-        if (diffOnlyDir) await rm(diffOnlyDir, { recursive: true, force: true });
+        if (diffOnlyDir) await rm(diffOnlyDir, { recursive: true, force: true }).catch(() => {});
       }
     },
   };

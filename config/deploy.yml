@@ -41,7 +41,6 @@ env:
     - GITLAB_TOKEN
     - GITLAB_WEBHOOK_SECRET
     - CLAUDE_CODE_OAUTH_TOKEN
-    - CODEX_HOME
     - CODEX_API_KEY
     - CODEX_ACCESS_TOKEN
   clear:
@@ -55,6 +54,9 @@ env:
     AI_PROVIDER: <%= ENV.fetch('AI_PROVIDER', 'claude') %>
     CLAUDE_MODEL: <%= ENV.fetch('CLAUDE_MODEL', 'claude-sonnet-4-6') %>
     CODEX_MODEL: <%= ENV.fetch('CODEX_MODEL', '') %>
+    CODEX_REASONING_EFFORT: <%= ENV.fetch('CODEX_REASONING_EFFORT', '') %>
+    CODEX_WEB_SEARCH_MODE: <%= ENV.fetch('CODEX_WEB_SEARCH_MODE', 'disabled') %>
+    CODEX_BASE_URL: <%= ENV.fetch('CODEX_BASE_URL', '') %>
     BOT_NAME: <%= ENV.fetch('BOT_NAME', 'Alátùńwò AI') %>
     # Deep reviews clone the PR so the model can read surrounding files (read-only
     # tools). Off by default; set DEEP_REVIEW=true to enable. See README "Deep reviews".

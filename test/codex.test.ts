@@ -56,17 +56,29 @@ test("codex SDK options preserve CODEX_HOME when set", () => {
   assert.equal(options.env?.CODEX_ACCESS_TOKEN, "codex-access-real");
 });
 
+test("codex SDK options support API base URL without exposing runtime path overrides", () => {
+  const options = __test.codexClientOptions({
+    CODEX_BASE_URL: "https://llm-gateway.example/v1",
+    CODEX_PATH_OVERRIDE: "/opt/codex/bin/codex",
+  });
+
+  assert.equal(options.baseUrl, "https://llm-gateway.example/v1");
+  assert.equal(options.codexPathOverride, undefined);
+});
+
 test("codex thread options use read-only sandbox, approval never, model, and deep-review directory", () => {
   const options = __test.threadOptions(
-    { CODEX_MODEL: "gpt-5.5" },
+    { CODEX_MODEL: "gpt-5.5", CODEX_REASONING_EFFORT: "high", CODEX_WEB_SEARCH_MODE: "disabled" },
     { addDir: "/tmp/clone", deep: true, maxTurns: 8 },
   );
 
   assert.equal(options.sandboxMode, "read-only");
   assert.equal(options.approvalPolicy, "never");
   assert.equal(options.model, "gpt-5.5");
+  assert.equal(options.modelReasoningEffort, "high");
+  assert.equal(options.webSearchMode, "disabled");
   assert.equal(options.workingDirectory, "/tmp/clone");
-  assert.deepEqual(options.additionalDirectories, ["/tmp/clone"]);
+  assert.equal(options.additionalDirectories, undefined);
   assert.equal(options.skipGitRepoCheck, undefined);
 });
 
@@ -87,6 +99,8 @@ test("codex validateConfig allows API key, access token, CODEX_HOME, and default
   assert.doesNotThrow(() => provider.validateConfig({ CODEX_HOME: "/home/app/.codex" }));
   assert.doesNotThrow(() => provider.validateConfig({}));
   assert.throws(() => provider.validateConfig({ CODEX_PROFILE: "reviewer" }), /CODEX_PROFILE is not supported/);
+  assert.throws(() => provider.validateConfig({ CODEX_REASONING_EFFORT: "extreme" }), /CODEX_REASONING_EFFORT/);
+  assert.throws(() => provider.validateConfig({ CODEX_WEB_SEARCH_MODE: "enabled" }), /CODEX_WEB_SEARCH_MODE/);
 });
 
 test("codex provider runs through SDK with output schema and parses finalResponse", async () => {
@@ -126,6 +140,7 @@ test("codex provider runs through SDK with output schema and parses finalRespons
   assert.equal(capturedThreadOptions?.approvalPolicy, "never");
   assert.equal(capturedThreadOptions?.model, "gpt-5.5");
   assert.equal(capturedThreadOptions?.workingDirectory, "/tmp/clone");
+  assert.equal(capturedThreadOptions?.additionalDirectories, undefined);
   assert.equal(capturedTurnOptions?.signal instanceof AbortSignal, true);
   assert.deepEqual(capturedTurnOptions?.outputSchema, schema);
 });
