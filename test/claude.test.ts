@@ -1,11 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildSubprocessEnv } from "../review.ts";
-import { selectProvider } from "../provider.ts";
-import { createClaudeProvider, CLAUDE_ENV_ALLOWLIST } from "../providers/claude.ts";
+import { runReview, selectProvider, type ReviewProvider } from "../provider.ts";
+import { createClaudeCliConfig, createClaudeProvider, CLAUDE_ENV_ALLOWLIST } from "../providers/claude.ts";
+import { buildSubprocessEnv } from "../runtime/spawn.ts";
+import { createCliBackedProvider } from "../providers/cli.ts";
 
-test("claude buildArgs defaults to a single diff-only pass on the default model", () => {
-  const args = createClaudeProvider({}).buildArgs({});
+test("claude CLI adapter defaults to a single diff-only pass on the default model", () => {
+  const args = createClaudeCliConfig({}).buildArgs({});
   assert.deepEqual(args, [
     "-p", "--output-format", "json", "--max-turns", "1", "--model", "claude-sonnet-4-6",
   ]);
@@ -13,13 +14,13 @@ test("claude buildArgs defaults to a single diff-only pass on the default model"
   assert.ok(!args.includes("--allowedTools"), "no tool restriction by default");
 });
 
-test("claude buildArgs honours CLAUDE_MODEL", () => {
-  const args = createClaudeProvider({ CLAUDE_MODEL: "claude-opus-4-8" }).buildArgs({});
+test("claude CLI adapter honours CLAUDE_MODEL", () => {
+  const args = createClaudeCliConfig({ CLAUDE_MODEL: "claude-opus-4-8" }).buildArgs({});
   assert.equal(args[args.indexOf("--model") + 1], "claude-opus-4-8");
 });
 
-test("claude buildArgs wires a deep review (dir + read-only tools, turn budget)", () => {
-  const args = createClaudeProvider({}).buildArgs({ maxTurns: 8, addDir: "/tmp/clone", deep: true });
+test("claude CLI adapter wires a deep review (dir + read-only tools, turn budget)", () => {
+  const args = createClaudeCliConfig({}).buildArgs({ maxTurns: 8, addDir: "/tmp/clone", deep: true });
   assert.equal(args[args.indexOf("--max-turns") + 1], "8");
   assert.equal(args[args.indexOf("--add-dir") + 1], "/tmp/clone");
   assert.equal(args[args.indexOf("--allowedTools") + 1], "Read,Grep,Glob");
@@ -29,7 +30,7 @@ test("claude buildArgs wires a deep review (dir + read-only tools, turn budget)"
 
 test("claude parseReply unwraps the Claude Code envelope to the model's text", () => {
   const stdout = JSON.stringify({ result: '```json\n{"summary":"ok"}\n```', other: "ignored" });
-  assert.equal(createClaudeProvider({}).parseReply(stdout), '```json\n{"summary":"ok"}\n```');
+  assert.equal(createClaudeCliConfig({}).parseReply(stdout), '```json\n{"summary":"ok"}\n```');
 });
 
 test("claude validateConfig rejects ANTHROPIC_API_KEY (would bypass the subscription)", () => {
@@ -63,5 +64,32 @@ test("selectProvider returns the Claude provider for 'claude' and by default", (
 });
 
 test("selectProvider fails loudly on an unknown provider name", () => {
-  assert.throws(() => selectProvider("codex"), /Unknown AI_PROVIDER/);
+  assert.throws(() => selectProvider("llama"), /supported: "claude", "codex"/);
+});
+
+test("runReview accepts a high-level provider without CLI fields", async () => {
+  const provider: ReviewProvider = {
+    name: "fake",
+    validateConfig() {},
+    async run(prompt) {
+      assert.equal(prompt, "review this");
+      return { summary: "ok", comments: [] };
+    },
+  };
+
+  assert.deepEqual(await runReview(provider, "review this"), { summary: "ok", comments: [] });
+  assert.ok(!("command" in provider));
+  assert.ok(!("buildArgs" in provider));
+});
+
+test("CLI-backed providers parse stdout through the shared review contract", async () => {
+  const provider = createCliBackedProvider({
+    name: "mock",
+    command: process.execPath,
+    envAllowlist: ["PATH"],
+    buildArgs: () => ["-e", "process.stdin.resume(); process.stdin.on('end', () => console.log(JSON.stringify({ result: '{\"summary\":\"ok\",\"comments\":[]}' })))"],
+    parseReply: (stdout) => JSON.parse(stdout).result,
+  });
+
+  assert.deepEqual(await provider.run("ignored"), { summary: "ok", comments: [] });
 });

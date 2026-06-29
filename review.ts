@@ -1,8 +1,7 @@
 /**
  * Pure, provider-agnostic helpers for the reviewer: prompt building, the JSON
- * output contract + parsing, review-header formatting, and minimal subprocess env
- * construction. No side effects — unit-testable without starting the server or
- * shelling out. Provider-specific CLI wiring lives in providers/<name>.ts.
+ * output contract + parsing, and review-header formatting. No side effects —
+ * unit-testable without starting the server or shelling out.
  */
 
 export type ReviewComment = {
@@ -37,45 +36,6 @@ export const DEEP_REVIEW_LABEL = "deep-review";
  */
 export function shouldDeepReview(envDefault: boolean, labels: readonly string[]): boolean {
   return envDefault || labels.some((name) => name.toLowerCase() === DEEP_REVIEW_LABEL);
-}
-
-/**
- * Non-secret process vars safe to forward to any subprocess: enough to be found on
- * PATH, locate config under HOME, write temp files, render UTF-8 output, and reach
- * the network through a proxy / custom CA. Deliberately excludes everything else so
- * service secrets are default-denied rather than inherited wholesale. Providers
- * extend this with the one token they need (see providers/<name>.ts).
- */
-export const BASE_ENV_ALLOWLIST = [
-  "PATH", "HOME", "TMPDIR", "USER", "SHELL",
-  "LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE", "TERM",
-  "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS",
-  "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
-  "http_proxy", "https_proxy", "no_proxy",
-] as const;
-
-/**
- * Env allowlist for the `git` clone subprocess. It needs no secret from the
- * environment — the installation token is injected separately via GIT_CONFIG_* —
- * so it gets the base infra vars only.
- */
-export const GIT_ENV_ALLOWLIST = BASE_ENV_ALLOWLIST;
-
-/**
- * Build a minimal subprocess environment: copy only the allowlisted names that are
- * actually set in `source` (never introducing `undefined` keys), then layer `extra`
- * on top (which wins on conflict). Pure — the caller passes `process.env` in.
- */
-export function buildSubprocessEnv(
-  source: NodeJS.ProcessEnv,
-  allowlist: readonly string[],
-  extra: NodeJS.ProcessEnv = {},
-): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {};
-  for (const key of allowlist) {
-    if (source[key] !== undefined) env[key] = source[key];
-  }
-  return { ...env, ...extra };
 }
 
 /** PR author-supplied context. Untrusted — fed to the model as data, not instructions. */
@@ -199,8 +159,8 @@ export function stripFences(s: string): string {
 
 /**
  * Parse the model's text reply (the review JSON, possibly fenced) into a
- * ReviewResult. This is the shared output contract; unwrapping any provider-specific
- * stdout envelope into this text happens first, in the provider's parseReply.
+ * ReviewResult. This is the shared output contract; providers unwrap any
+ * provider-specific response envelope before calling this.
  */
 export function parseReviewJson(text: string): ReviewResult {
   return JSON.parse(stripFences(text)) as ReviewResult;

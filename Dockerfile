@@ -1,9 +1,9 @@
-# Production image for the Claude PR Reviewer webhook service.
+# Production image for the AI Code Reviewer webhook service.
 #
 # Runs the app under tsx (no separate build step) and bundles the Claude Code CLI
-# so the service can shell out to `claude` at runtime. Auth is supplied at runtime
-# via CLAUDE_CODE_OAUTH_TOKEN — it is never baked into the image, and
-# ANTHROPIC_API_KEY is never set (it would override the subscription token).
+# so the service can shell out to `claude` at runtime. Codex support is supplied by
+# the production @openai/codex-sdk dependency, which bundles @openai/codex. Auth is
+# supplied at runtime; it is never baked into the image.
 
 FROM node:22-slim
 
@@ -22,15 +22,13 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
-# Application source: root-level TypeScript modules (server.ts and its siblings
-# store.ts/review.ts/clone.ts/provider.ts/repository.ts) plus the providers/ (AI) and
-# repositories/ (code-host) directories. Run directly via tsx — no build step. We copy
-# specific paths rather than `COPY .`, so test/ and other non-runtime files are excluded
-# by construction. Note `COPY *.ts` matches only root-level modules, so each new source
-# subdirectory needs its own COPY line (below) or it's silently dropped from the image.
+# Application source. Run directly via tsx — no build step. We copy specific paths
+# rather than `COPY .`, so test/ and other non-runtime files are excluded by
+# construction. Each source subdirectory needs its own COPY line.
 COPY *.ts ./
 COPY providers/ ./providers/
 COPY repositories/ ./repositories/
+COPY runtime/ ./runtime/
 
 ENV NODE_ENV=production \
     PORT=3000 \

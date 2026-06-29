@@ -4,13 +4,12 @@ import {
   buildContextPrompt,
   buildDiffPrompt,
   buildReviewHeader,
-  buildSubprocessEnv,
-  GIT_ENV_ALLOWLIST,
   parsePositiveInt,
   parseReviewJson,
   shouldDeepReview,
   stripFences,
 } from "../review.ts";
+import { buildSubprocessEnv, GIT_ENV_ALLOWLIST } from "../runtime/spawn.ts";
 
 test("buildReviewHeader marks a deep review with the bot name, badge, and summary", () => {
   const header = buildReviewHeader("Alátùńwò AI", true, "Looks solid.");

@@ -11,9 +11,9 @@ webhooks for every repo it's installed on.
 **Two pluggable seams.** The **AI provider** (the review engine) and the
 **repository provider** (the code host) are both swappable:
 
-- **AI provider** — **Claude** (via the Claude Code CLI) is the default and
-  currently only one. Seam: `provider.ts`, `providers/<name>.ts`. Select with
-  `AI_PROVIDER` (default `claude`).
+- **AI provider** — **Claude** (via the Claude Code CLI) is the default; **Codex**
+  (via the official `@openai/codex-sdk`) is also supported. Seam: `provider.ts`,
+  `providers/<name>.ts`. Select with `AI_PROVIDER` (default `claude`).
 - **Repository provider** — **GitHub** (a GitHub App, default) and **GitLab** (a
   bot access token). One host per deploy. Seam: `repository.ts`,
   `repositories/<name>.ts`. Select with `REPO_PROVIDER` (default `github`). The
@@ -29,7 +29,7 @@ PR/MR: "Request review from <the bot>"
         │
         ├──►  fetch the diff (repository provider)
         │
-        ├──►  AI_PROVIDER CLI (headless, on your subscription; Claude by default)
+        ├──►  selected AI provider (Claude CLI by default, Codex SDK optional)
         │            returns JSON: { summary, comments[] }
         ▼
   POST a single review with inline comments; record the outcome
@@ -96,7 +96,9 @@ Free tier) on a merge request. Re-requesting a review fires it again on a new co
 > repos you actually review. As with GitHub, the trigger (a reviewer) is public, so
 > don't expose the bot on projects where strangers can open MRs against it.
 
-## 2. Get a Claude subscription token
+## 2. Set up the AI provider
+
+### Claude (`AI_PROVIDER=claude`)
 
 On any machine with a browser:
 
@@ -109,20 +111,56 @@ Put it in `.env` as `CLAUDE_CODE_OAUTH_TOKEN`. It's valid ~1 year and bills to
 your Pro/Max plan. (On a browserless server, run `setup-token` on your laptop and
 copy the token over, or SSH-forward the OAuth callback port.)
 
+### Codex (`AI_PROVIDER=codex`)
+
+Codex runs through the official `@openai/codex-sdk` package. The SDK wraps the
+Codex runtime from `@openai/codex`, which is installed as a production dependency;
+you do not need to install a separate global `codex` binary for this service.
+
+For deep reviews, the service starts the SDK thread with the checked-out PR/MR
+head as the working directory and an additional directory. User config loads by
+default; set `CODEX_PROFILE=reviewer` to select that Codex profile, or
+`CODEX_MODEL=gpt-5.5` to override the configured model.
+
+Auth precedence:
+
+- `CODEX_API_KEY` wins when set. This is the simplest automation mode for the SDK.
+- Otherwise Codex uses CLI auth/config under `CODEX_HOME` when set.
+- Otherwise `CODEX_ACCESS_TOKEN` can provide trusted automation/subscription auth.
+  This is the Codex/ChatGPT access-token path, operationally closest to the
+  Claude `CLAUDE_CODE_OAUTH_TOKEN` setup.
+- If none are set, Codex falls back to the default `~/.codex` path, so the host
+  must already be logged in with `codex login`.
+
+The Codex docs call this token `CODEX_ACCESS_TOKEN`. For ephemeral automation,
+store it as an environment secret. For persistent cached CLI auth, seed the host
+once with:
+
+```bash
+printf '%s' "$CODEX_ACCESS_TOKEN" | codex login --with-access-token
+```
+
+Safety: Codex runs with a read-only sandbox, approval mode `never`, and structured
+output schema support. The SDK subprocess env forwards only base infra vars plus
+Codex auth/config vars (`CODEX_HOME`, `CODEX_SQLITE_HOME`, `CODEX_ACCESS_TOKEN`,
+`CODEX_API_KEY`, `CODEX_CA_CERTIFICATE`, `RUST_LOG`); repository provider secrets
+and Claude/Anthropic secrets are not forwarded.
+
 ## 3. Configure
 
 ```bash
-cp .env.example .env      # set REPO_PROVIDER + that host's block, and the Claude token
+cp .env.example .env      # set REPO_PROVIDER + that host's block, and one AI provider
 npm install
 ```
 
 ## 4. Host it
 
-The service must run the `claude` CLI, so it needs Node 18+ **and** the Claude
-Code CLI installed — a container or a small VPS, not a thin serverless function.
+The service needs Node 18+ and, for `AI_PROVIDER=claude`, the Claude Code CLI. For
+`AI_PROVIDER=codex`, the Codex runtime is provided by production npm dependencies.
+Use a container or a small VPS, not a thin serverless function.
 
 ```bash
-npm i -g @anthropic-ai/claude-code   # on the host
+npm i -g @anthropic-ai/claude-code   # on the host, for AI_PROVIDER=claude
 npm start
 ```
 
@@ -137,7 +175,7 @@ These are implemented, not aspirational:
 - **Fast ack + background queue:** hosts fail a webhook they can't answer within
   ~10s and retry it. The service acks the delivery immediately and runs the
   review in the background, serialised through a one-at-a-time queue so only a
-  single `claude` subprocess runs at once (predictable memory on a small box).
+  single AI provider subprocess runs at once (predictable memory on a small box).
 - **Idempotency & audit log:** every requested review is recorded in a SQLite
   store keyed by the change's head SHA, so webhook retries — and process restarts —
   never produce duplicate reviews. On GitLab this also absorbs the noise of the
@@ -175,7 +213,7 @@ These are implemented, not aspirational:
 ## Deep reviews (optional)
 
 By default a review sees only the unified diff. A deep review instead clones the
-change head and lets Claude open **surrounding files** (definitions, call sites,
+change head and lets the AI provider open **surrounding files** (definitions, call sites,
 tests) for richer, context-aware comments.
 
 - **Per change:** add the `deep-review` label to a PR/MR. The next time the bot is
@@ -186,10 +224,12 @@ tests) for richer, context-aware comments.
 - **How it works:** the repository provider fetches the change head into a throwaway
   temp dir — shallow, fork-agnostic (`pull/<n>/head` on GitHub via a short-lived
   contents:read installation token; `merge-requests/<iid>/head` on GitLab via the
-  bot token). Claude runs against that checkout with a raised turn budget
-  (`DEEP_REVIEW_MAX_TURNS`, default 8); the temp dir is always removed afterward.
+  bot token). The provider runs against that checkout with a raised turn budget
+  where supported (`DEEP_REVIEW_MAX_TURNS`, default 8); the temp dir is always
+  removed afterward.
 - **Security:** Claude gets **read-only** tools (`Read`, `Grep`, `Glob`) — never
-  `Bash`/`Write`/`Edit` — so untrusted code is read, never executed. The token is
+  `Bash`/`Write`/`Edit`; Codex runs with `--sandbox read-only` and
+  `--ask-for-approval never`. Untrusted code is read, never executed. The token is
   passed via `GIT_CONFIG_*` env, so it never lands in `.git/config` or the process
   list. The worst case from a malicious change is a wrong comment, not RCE.
 - **Cost:** every deep review clones a repo and uses multiple turns, drawing more

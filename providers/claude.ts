@@ -5,8 +5,9 @@
  * real environment.
  */
 
-import { BASE_ENV_ALLOWLIST } from "../review.ts";
 import type { ReviewProvider, ReviewRunOpts } from "../provider.ts";
+import { BASE_ENV_ALLOWLIST } from "../runtime/spawn.ts";
+import { createCliBackedProvider, type CliProviderConfig } from "./cli.ts";
 
 /** Default model when CLAUDE_MODEL is unset. */
 const DEFAULT_MODEL = "claude-sonnet-4-6";
@@ -24,8 +25,7 @@ const READ_ONLY_TOOLS = ["Read", "Grep", "Glob"] as const;
  */
 export const CLAUDE_ENV_ALLOWLIST = [...BASE_ENV_ALLOWLIST, "CLAUDE_CODE_OAUTH_TOKEN"] as const;
 
-/** Build a Claude provider bound to the configured model. */
-export function createClaudeProvider(env: NodeJS.ProcessEnv): ReviewProvider {
+export function createClaudeCliConfig(env: NodeJS.ProcessEnv): CliProviderConfig {
   const model = env.CLAUDE_MODEL?.trim() || DEFAULT_MODEL;
 
   return {
@@ -64,4 +64,9 @@ export function createClaudeProvider(env: NodeJS.ProcessEnv): ReviewProvider {
       return String(envelope.result ?? "").trim();
     },
   };
+}
+
+/** Build a Claude provider bound to the configured model. */
+export function createClaudeProvider(env: NodeJS.ProcessEnv): ReviewProvider {
+  return createCliBackedProvider(createClaudeCliConfig(env));
 }

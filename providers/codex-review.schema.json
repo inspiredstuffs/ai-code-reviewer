@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "summary": { "type": "string" },
+    "comments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "path": { "type": "string" },
+          "line": { "type": "integer", "minimum": 1 },
+          "body": { "type": "string" },
+          "side": { "type": "string", "enum": ["RIGHT", "LEFT"] },
+          "severity": { "type": "string", "enum": ["info", "warn", "blocker"] }
+        },
+        "required": ["path", "line", "body"]
+      }
+    }
+  },
+  "required": ["summary", "comments"]
+}
