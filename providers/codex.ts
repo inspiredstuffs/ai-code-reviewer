@@ -55,7 +55,9 @@ function threadOptions(env: NodeJS.ProcessEnv, opts: ReviewRunOpts): ThreadOptio
     sandboxMode: "read-only",
     approvalPolicy: "never",
     ...(model ? { model } : {}),
-    ...(opts.addDir ? { workingDirectory: opts.addDir, additionalDirectories: [opts.addDir] } : {}),
+    ...(opts.addDir
+      ? { workingDirectory: opts.addDir, additionalDirectories: [opts.addDir] }
+      : { skipGitRepoCheck: true }),
   };
 }
 

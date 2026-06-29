@@ -66,6 +66,17 @@ test("codex thread options use read-only sandbox, approval never, model, and dee
   assert.equal(options.model, "gpt-5.5");
   assert.equal(options.workingDirectory, "/tmp/clone");
   assert.deepEqual(options.additionalDirectories, ["/tmp/clone"]);
+  assert.equal(options.skipGitRepoCheck, undefined);
+});
+
+test("codex diff-only thread options skip the git repo check", () => {
+  const options = __test.threadOptions({}, {});
+
+  assert.equal(options.sandboxMode, "read-only");
+  assert.equal(options.approvalPolicy, "never");
+  assert.equal(options.skipGitRepoCheck, true);
+  assert.equal(options.workingDirectory, undefined);
+  assert.equal(options.additionalDirectories, undefined);
 });
 
 test("codex validateConfig allows API key, access token, CODEX_HOME, and default CLI auth fallback", () => {
