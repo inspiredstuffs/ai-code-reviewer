@@ -55,7 +55,6 @@ env:
     AI_PROVIDER: <%= ENV.fetch('AI_PROVIDER', 'claude') %>
     CLAUDE_MODEL: <%= ENV.fetch('CLAUDE_MODEL', 'claude-sonnet-4-6') %>
     CODEX_MODEL: <%= ENV.fetch('CODEX_MODEL', '') %>
-    CODEX_PROFILE: <%= ENV.fetch('CODEX_PROFILE', '') %>
     BOT_NAME: <%= ENV.fetch('BOT_NAME', 'Alátùńwò AI') %>
     # Deep reviews clone the PR so the model can read surrounding files (read-only
     # tools). Off by default; set DEEP_REVIEW=true to enable. See README "Deep reviews".

@@ -1,8 +1,13 @@
 import { Codex, type CodexOptions, type ThreadOptions, type TurnOptions } from "@openai/codex-sdk";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { parseReviewJson, type ReviewResult } from "../review.ts";
 import type { ReviewProvider, ReviewRunOpts } from "../provider.ts";
 import { BASE_ENV_ALLOWLIST, buildSubprocessEnv } from "../runtime/spawn.ts";
 import schema from "./codex-review.schema.json" with { type: "json" };
+
+const DEFAULT_TIMEOUT_MS_PER_TURN = 60_000;
 
 export const CODEX_ENV_ALLOWLIST = [
   ...BASE_ENV_ALLOWLIST,
@@ -37,19 +42,14 @@ function codexEnvAllowlist(env: NodeJS.ProcessEnv): readonly string[] {
 function codexClientOptions(env: NodeJS.ProcessEnv): CodexOptions {
   const subprocessEnv = buildSubprocessEnv(env, codexEnvAllowlist(env));
   const apiKey = env.CODEX_API_KEY?.trim();
-  const profile = env.CODEX_PROFILE?.trim();
-  const config: NonNullable<CodexOptions["config"]> = {};
-
-  if (profile) config.profile = profile;
 
   return {
     env: subprocessEnv,
     ...(apiKey ? { apiKey } : {}),
-    ...(Object.keys(config).length > 0 ? { config } : {}),
   };
 }
 
-function threadOptions(env: NodeJS.ProcessEnv, opts: ReviewRunOpts): ThreadOptions {
+function threadOptions(env: NodeJS.ProcessEnv, opts: ReviewRunOpts, diffOnlyDir?: string): ThreadOptions {
   const model = env.CODEX_MODEL?.trim();
   return {
     sandboxMode: "read-only",
@@ -57,8 +57,12 @@ function threadOptions(env: NodeJS.ProcessEnv, opts: ReviewRunOpts): ThreadOptio
     ...(model ? { model } : {}),
     ...(opts.addDir
       ? { workingDirectory: opts.addDir, additionalDirectories: [opts.addDir] }
-      : { skipGitRepoCheck: true }),
+      : { workingDirectory: diffOnlyDir, skipGitRepoCheck: true }),
   };
+}
+
+function reviewTimeoutMs(opts: ReviewRunOpts): number {
+  return (opts.maxTurns ?? 1) * DEFAULT_TIMEOUT_MS_PER_TURN;
 }
 
 export function createCodexProvider(env: NodeJS.ProcessEnv, deps: CodexProviderDeps = {}): ReviewProvider {
@@ -70,6 +74,12 @@ export function createCodexProvider(env: NodeJS.ProcessEnv, deps: CodexProviderD
     validateConfig(e: NodeJS.ProcessEnv): void {
       const hasExplicitAuth = Boolean(e.CODEX_API_KEY?.trim() || e.CODEX_ACCESS_TOKEN?.trim());
       const hasConfiguredHome = Boolean(e.CODEX_HOME?.trim());
+      if (e.CODEX_PROFILE?.trim()) {
+        throw new Error(
+          "CODEX_PROFILE is not supported by @openai/codex-sdk: the bundled CLI requires " +
+            "--profile, which the SDK does not expose. Configure model/auth directly instead.",
+        );
+      }
       if (!hasExplicitAuth && !hasConfiguredHome) {
         console.warn(
           "AI_PROVIDER=codex without CODEX_API_KEY, CODEX_ACCESS_TOKEN, or CODEX_HOME; " +
@@ -79,10 +89,18 @@ export function createCodexProvider(env: NodeJS.ProcessEnv, deps: CodexProviderD
     },
 
     async run(prompt: string, opts: ReviewRunOpts = {}): Promise<ReviewResult> {
+      const diffOnlyDir = opts.addDir ? undefined : await mkdtemp(join(tmpdir(), "codex-diff-review-"));
       const client = createClient(codexClientOptions(env));
-      const thread = client.startThread(threadOptions(env, opts));
-      const turn = await thread.run(prompt, { outputSchema: schema });
-      return parseReviewJson(turn.finalResponse);
+      try {
+        const thread = client.startThread(threadOptions(env, opts, diffOnlyDir));
+        const turn = await thread.run(prompt, {
+          outputSchema: schema,
+          signal: AbortSignal.timeout(reviewTimeoutMs(opts)),
+        });
+        return parseReviewJson(turn.finalResponse);
+      } finally {
+        if (diffOnlyDir) await rm(diffOnlyDir, { recursive: true, force: true });
+      }
     },
   };
 }
@@ -90,5 +108,6 @@ export function createCodexProvider(env: NodeJS.ProcessEnv, deps: CodexProviderD
 export const __test = {
   codexClientOptions,
   codexEnvAllowlist,
+  reviewTimeoutMs,
   threadOptions,
 };

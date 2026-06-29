@@ -119,8 +119,7 @@ you do not need to install a separate global `codex` binary for this service.
 
 For deep reviews, the service starts the SDK thread with the checked-out PR/MR
 head as the working directory and an additional directory. User config loads by
-default; set `CODEX_PROFILE=reviewer` to select that Codex profile, or
-`CODEX_MODEL=gpt-5.5` to override the configured model.
+default; set `CODEX_MODEL=gpt-5.5` to override the configured model.
 
 Auth precedence:
 

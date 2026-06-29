@@ -1,9 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import type { CodexOptions, ThreadOptions, TurnOptions } from "@openai/codex-sdk";
 import { buildSubprocessEnv } from "../runtime/spawn.ts";
 import { selectProvider } from "../provider.ts";
 import { createCodexProvider, CODEX_ENV_ALLOWLIST, __test } from "../providers/codex.ts";
+import schema from "../providers/codex-review.schema.json" with { type: "json" };
 
 test("codex env carries Codex auth/config vars but never service or Claude secrets", () => {
   const source = {
@@ -41,15 +43,14 @@ test("codex SDK options give CODEX_API_KEY precedence over CODEX_ACCESS_TOKEN", 
   assert.ok(!("CODEX_ACCESS_TOKEN" in (options.env ?? {})), "access token is withheld when API-key mode is active");
 });
 
-test("codex SDK options preserve CODEX_HOME/profile config when set", () => {
+test("codex SDK options preserve CODEX_HOME when set", () => {
   const options = __test.codexClientOptions({
     PATH: "/usr/bin",
     CODEX_HOME: "/home/app/.codex",
     CODEX_ACCESS_TOKEN: "codex-access-real",
-    CODEX_PROFILE: "reviewer",
   });
 
-  assert.deepEqual(options.config, { profile: "reviewer" });
+  assert.equal(options.config, undefined);
   assert.equal(options.env?.PATH, "/usr/bin");
   assert.equal(options.env?.CODEX_HOME, "/home/app/.codex");
   assert.equal(options.env?.CODEX_ACCESS_TOKEN, "codex-access-real");
@@ -70,21 +71,22 @@ test("codex thread options use read-only sandbox, approval never, model, and dee
 });
 
 test("codex diff-only thread options skip the git repo check", () => {
-  const options = __test.threadOptions({}, {});
+  const options = __test.threadOptions({}, {}, "/tmp/codex-diff-review");
 
   assert.equal(options.sandboxMode, "read-only");
   assert.equal(options.approvalPolicy, "never");
   assert.equal(options.skipGitRepoCheck, true);
-  assert.equal(options.workingDirectory, undefined);
+  assert.equal(options.workingDirectory, "/tmp/codex-diff-review");
   assert.equal(options.additionalDirectories, undefined);
 });
 
-test("codex validateConfig allows API key, access token, CODEX_HOME, and default CLI auth fallback", () => {
+test("codex validateConfig allows API key, access token, CODEX_HOME, and default CLI auth fallback, but rejects profile", () => {
   const provider = createCodexProvider({});
   assert.doesNotThrow(() => provider.validateConfig({ CODEX_API_KEY: "sk-codex" }));
   assert.doesNotThrow(() => provider.validateConfig({ CODEX_ACCESS_TOKEN: "codex-access" }));
   assert.doesNotThrow(() => provider.validateConfig({ CODEX_HOME: "/home/app/.codex" }));
   assert.doesNotThrow(() => provider.validateConfig({}));
+  assert.throws(() => provider.validateConfig({ CODEX_PROFILE: "reviewer" }), /CODEX_PROFILE is not supported/);
 });
 
 test("codex provider runs through SDK with output schema and parses finalResponse", async () => {
@@ -94,7 +96,7 @@ test("codex provider runs through SDK with output schema and parses finalRespons
   let capturedTurnOptions: TurnOptions | undefined;
 
   const provider = createCodexProvider(
-    { CODEX_API_KEY: "sk-codex-real", CODEX_MODEL: "gpt-5.5", CODEX_PROFILE: "reviewer" },
+    { CODEX_API_KEY: "sk-codex-real", CODEX_MODEL: "gpt-5.5" },
     {
       createClient(options) {
         capturedClientOptions = options;
@@ -119,12 +121,51 @@ test("codex provider runs through SDK with output schema and parses finalRespons
   assert.deepEqual(result, { summary: "ok", comments: [] });
   assert.equal(capturedPrompt, "review prompt");
   assert.equal(capturedClientOptions?.apiKey, "sk-codex-real");
-  assert.deepEqual(capturedClientOptions?.config, { profile: "reviewer" });
+  assert.equal(capturedClientOptions?.config, undefined);
   assert.equal(capturedThreadOptions?.sandboxMode, "read-only");
   assert.equal(capturedThreadOptions?.approvalPolicy, "never");
   assert.equal(capturedThreadOptions?.model, "gpt-5.5");
   assert.equal(capturedThreadOptions?.workingDirectory, "/tmp/clone");
-  assert.ok(capturedTurnOptions?.outputSchema, "structured output schema is passed to the SDK");
+  assert.equal(capturedTurnOptions?.signal instanceof AbortSignal, true);
+  assert.deepEqual(capturedTurnOptions?.outputSchema, schema);
+});
+
+test("codex provider isolates diff-only reviews in a temporary directory and removes it", async () => {
+  let capturedThreadOptions: ThreadOptions | undefined;
+  let tempDir = "";
+
+  const provider = createCodexProvider(
+    { CODEX_API_KEY: "sk-codex-real" },
+    {
+      createClient() {
+        return {
+          startThread(options) {
+            capturedThreadOptions = options;
+            tempDir = options?.workingDirectory ?? "";
+            assert.match(tempDir, /codex-diff-review-/, "diff-only workdir uses the Codex temp prefix");
+            assert.equal(existsSync(tempDir), true, "temp directory exists during run");
+            return {
+              async run(_prompt, options) {
+                assert.equal(options?.signal instanceof AbortSignal, true);
+                assert.deepEqual(options?.outputSchema, schema);
+                return { finalResponse: '{"summary":"ok","comments":[]}' };
+              },
+            };
+          },
+        };
+      },
+    },
+  );
+
+  assert.deepEqual(await provider.run("review prompt"), { summary: "ok", comments: [] });
+  assert.equal(capturedThreadOptions?.skipGitRepoCheck, true);
+  assert.equal(capturedThreadOptions?.additionalDirectories, undefined);
+  assert.equal(existsSync(tempDir), false, "temp directory is removed after run");
+});
+
+test("codex timeout scales with the review turn budget", () => {
+  assert.equal(__test.reviewTimeoutMs({}), 60_000);
+  assert.equal(__test.reviewTimeoutMs({ maxTurns: 8 }), 480_000);
 });
 
 test("selectProvider returns the Codex provider and Claude remains the default", () => {
