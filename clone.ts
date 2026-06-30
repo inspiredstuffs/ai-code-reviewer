@@ -15,7 +15,7 @@ import { spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildSubprocessEnv, GIT_ENV_ALLOWLIST } from "./review.ts";
+import { buildSubprocessEnv, GIT_ENV_ALLOWLIST } from "./runtime/spawn.ts";
 
 /**
  * Build an HTTP `AUTHORIZATION: basic …` header from a username + token. GitHub uses

@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@openai/codex-sdk": "^0.142.4",
     "better-sqlite3": "^12.11.1",
     "express": "^4.19.2",
     "octokit": "^4.1.0",

@@ -1,4 +1,4 @@
-# Production overrides for the Claude PR Reviewer. Loaded via
+# Production overrides for the AI Code Reviewer. Loaded via
 # `bin/kamal -d production`. Supplies the host(s) and the public domain Kamal's
 # built-in proxy serves over HTTPS (automatic Let's Encrypt — no Caddy/nginx).
 #

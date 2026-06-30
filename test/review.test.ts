@@ -4,13 +4,12 @@ import {
   buildContextPrompt,
   buildDiffPrompt,
   buildReviewHeader,
-  buildSubprocessEnv,
-  GIT_ENV_ALLOWLIST,
   parsePositiveInt,
   parseReviewJson,
   shouldDeepReview,
   stripFences,
 } from "../review.ts";
+import { buildSubprocessEnv, GIT_ENV_ALLOWLIST } from "../runtime/spawn.ts";
 
 test("buildReviewHeader marks a deep review with the bot name, badge, and summary", () => {
   const header = buildReviewHeader("Alátùńwò AI", true, "Looks solid.");
@@ -165,4 +164,16 @@ test("parseReviewJson parses the (possibly fenced) review JSON text", () => {
   );
   const withComment = parseReviewJson('{"summary":"s","comments":[{"path":"a.ts","line":3,"body":"x"}]}');
   assert.equal(withComment.comments[0].path, "a.ts");
+  const withOptionalFields = parseReviewJson('{"summary":"s","comments":[{"path":"a.ts","line":3,"body":"x","side":"LEFT","severity":"warn"}]}');
+  assert.equal(withOptionalFields.comments[0].side, "LEFT");
+  assert.equal(withOptionalFields.comments[0].severity, "warn");
+});
+
+test("parseReviewJson rejects malformed review contracts", () => {
+  assert.throws(() => parseReviewJson("[]"), /JSON object/);
+  assert.throws(() => parseReviewJson('{"summary":"s"}'), /summary and comments array/);
+  assert.throws(
+    () => parseReviewJson('{"summary":"s","comments":[{"path":"a.ts","line":"3","body":"x"}]}'),
+    /comments must include path, integer line, body/,
+  );
 });
