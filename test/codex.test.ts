@@ -66,6 +66,19 @@ test("codex SDK options support API base URL without exposing runtime path overr
   assert.equal(options.codexPathOverride, undefined);
 });
 
+test("Codex gateway options isolate runtime home and exclude reusable credentials", () => {
+  const grant = { token: "opaque-attempt-token", baseUrl: "http://127.0.0.1:8080/attempts/a/openai/v1" };
+  const options = __test.codexClientOptions({
+    PATH: "/usr/bin", HOME: "/home/app", CODEX_ACCESS_TOKEN: "reusable-token",
+    CODEX_API_KEY: "direct-key", CODEX_HOME: "/home/app/.codex",
+  }, grant, "/tmp/acr-isolated-home");
+  assert.equal(options.apiKey, grant.token);
+  assert.equal(options.baseUrl, grant.baseUrl);
+  assert.equal(options.env?.CODEX_HOME, "/tmp/acr-isolated-home");
+  assert.equal(options.env?.CODEX_ACCESS_TOKEN, undefined);
+  assert.equal(options.env?.CODEX_API_KEY, undefined);
+});
+
 test("codex thread options use read-only sandbox, approval never, model, and deep-review directory", () => {
   const options = __test.threadOptions(
     { CODEX_MODEL: "gpt-5.5", CODEX_REASONING_EFFORT: "high", CODEX_WEB_SEARCH_MODE: "disabled" },
@@ -130,7 +143,8 @@ test("codex provider runs through SDK with output schema and parses finalRespons
     },
   );
 
-  const result = await provider.run("review prompt", { addDir: "/tmp/clone", deep: true });
+  const signal = new AbortController().signal;
+  const result = await provider.run("review prompt", { addDir: "/tmp/clone", deep: true, signal });
 
   assert.deepEqual(result, { summary: "ok", comments: [] });
   assert.equal(capturedPrompt, "review prompt");
@@ -141,8 +155,13 @@ test("codex provider runs through SDK with output schema and parses finalRespons
   assert.equal(capturedThreadOptions?.model, "gpt-5.5");
   assert.equal(capturedThreadOptions?.workingDirectory, "/tmp/clone");
   assert.equal(capturedThreadOptions?.additionalDirectories, undefined);
-  assert.equal(capturedTurnOptions?.signal instanceof AbortSignal, true);
+  assert.equal(capturedTurnOptions?.signal, signal);
   assert.deepEqual(capturedTurnOptions?.outputSchema, schema);
+  assert.deepEqual(
+    [...schema.properties.comments.items.required].sort(),
+    Object.keys(schema.properties.comments.items.properties).sort(),
+    "Codex strict output requires every finding property",
+  );
 });
 
 test("codex provider isolates diff-only reviews in a temporary directory and removes it", async () => {
@@ -172,15 +191,15 @@ test("codex provider isolates diff-only reviews in a temporary directory and rem
     },
   );
 
-  assert.deepEqual(await provider.run("review prompt"), { summary: "ok", comments: [] });
+  const signal = new AbortController().signal;
+  assert.deepEqual(await provider.run("review prompt", { signal }), { summary: "ok", comments: [] });
   assert.equal(capturedThreadOptions?.skipGitRepoCheck, true);
   assert.equal(capturedThreadOptions?.additionalDirectories, undefined);
   assert.equal(existsSync(tempDir), false, "temp directory is removed after run");
 });
 
-test("codex timeout scales with the review turn budget", () => {
-  assert.equal(__test.reviewTimeoutMs({}), 60_000);
-  assert.equal(__test.reviewTimeoutMs({ maxTurns: 8 }), 480_000);
+test("codex uses the shared caller signal instead of a private per-turn timeout", () => {
+  assert.equal("reviewTimeoutMs" in __test, false);
 });
 
 test("selectProvider returns the Codex provider and Claude remains the default", () => {

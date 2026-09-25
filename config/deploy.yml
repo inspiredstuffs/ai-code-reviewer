@@ -40,6 +40,7 @@ env:
     - REVIEWER_LOGIN
     - GITLAB_TOKEN
     - GITLAB_WEBHOOK_SECRET
+    - GITLAB_EXTERNAL_STATUS_CHECK_IDS_JSON
     - CLAUDE_CODE_OAUTH_TOKEN
     - CODEX_API_KEY
     - CODEX_ACCESS_TOKEN
@@ -51,6 +52,8 @@ env:
     DATABASE_PATH: "/data/reviews.db"
     # GitLab API base (REPO_PROVIDER=gitlab); ignored by the GitHub provider.
     GITLAB_API_URL: <%= ENV.fetch('GITLAB_API_URL', 'https://gitlab.com') %>
+    GITLAB_WEBHOOK_MAX_AGE_SECONDS: "<%= ENV.fetch('GITLAB_WEBHOOK_MAX_AGE_SECONDS', '300') %>"
+    REPOSITORY_ALLOWED_REPOSITORIES: "<%= ENV.fetch('REPOSITORY_ALLOWED_REPOSITORIES', '') %>"
     AI_PROVIDER: <%= ENV.fetch('AI_PROVIDER', 'claude') %>
     CLAUDE_MODEL: <%= ENV.fetch('CLAUDE_MODEL', 'claude-sonnet-4-6') %>
     # These default to "" when unset (the app treats empty as unset). The quotes are
@@ -60,10 +63,24 @@ env:
     CODEX_REASONING_EFFORT: "<%= ENV.fetch('CODEX_REASONING_EFFORT', '') %>"
     CODEX_WEB_SEARCH_MODE: <%= ENV.fetch('CODEX_WEB_SEARCH_MODE', 'disabled') %>
     CODEX_BASE_URL: "<%= ENV.fetch('CODEX_BASE_URL', '') %>"
+    MODEL_GATEWAY_SOCKET_PATH: "<%= ENV.fetch('MODEL_GATEWAY_SOCKET_PATH', '') %>"
+    MODEL_GATEWAY_ANTHROPIC_PROFILE: "<%= ENV.fetch('MODEL_GATEWAY_ANTHROPIC_PROFILE', '') %>"
+    MODEL_GATEWAY_OPENAI_PROFILE: "<%= ENV.fetch('MODEL_GATEWAY_OPENAI_PROFILE', '') %>"
+    REVIEW_TIMEOUT_SECONDS: "<%= ENV.fetch('REVIEW_TIMEOUT_SECONDS', '1800') %>"
+    CLAUDE_TIMEOUT_SECONDS: "<%= ENV.fetch('CLAUDE_TIMEOUT_SECONDS', '') %>"
+    CODEX_TIMEOUT_SECONDS: "<%= ENV.fetch('CODEX_TIMEOUT_SECONDS', '') %>"
+    # GitHub requires at least one owner or exact repository scope. GitLab ignores
+    # these values.
+    GITHUB_ALLOWED_OWNERS: "<%= ENV.fetch('GITHUB_ALLOWED_OWNERS', '') %>"
+    GITHUB_ALLOWED_REPOSITORIES: "<%= ENV.fetch('GITHUB_ALLOWED_REPOSITORIES', '') %>"
+    GITHUB_AUTO_REVIEW_REPOSITORIES: "<%= ENV.fetch('GITHUB_AUTO_REVIEW_REPOSITORIES', '') %>"
+    ACR_APPROVAL_MODE: <%= ENV.fetch('ACR_APPROVAL_MODE', 'human') %>
+    ACR_REVIEW_ADMISSION_ENABLED: "<%= ENV.fetch('ACR_REVIEW_ADMISSION_ENABLED', 'true') %>"
+    ACR_REVIEW_TERMINAL_SUCCESS_ENABLED: "<%= ENV.fetch('ACR_REVIEW_TERMINAL_SUCCESS_ENABLED', 'true') %>"
     BOT_NAME: <%= ENV.fetch('BOT_NAME', 'Alátùńwò AI') %>
     # Deep reviews clone the PR so the model can read surrounding files (read-only
-    # tools). Off by default; set DEEP_REVIEW=true to enable. See README "Deep reviews".
-    DEEP_REVIEW: <%= ENV.fetch('DEEP_REVIEW', 'false') %>
+    # tools). Enabled by default; set DEEP_REVIEW=false for diff-only reviews.
+    DEEP_REVIEW: <%= ENV.fetch('DEEP_REVIEW', 'true') %>
     DEEP_REVIEW_MAX_TURNS: <%= ENV.fetch('DEEP_REVIEW_MAX_TURNS', '8') %>
 
 # Persist the SQLite review store across deploys. Without this the DB lives inside

@@ -28,14 +28,27 @@ export const CLAUDE_ENV_ALLOWLIST = [...BASE_ENV_ALLOWLIST, "CLAUDE_CODE_OAUTH_T
 
 export function createClaudeCliConfig(env: NodeJS.ProcessEnv): CliProviderConfig {
   const model = env.CLAUDE_MODEL?.trim() || DEFAULT_MODEL;
+  const gatewayMode = Boolean(env.MODEL_GATEWAY_SOCKET_PATH?.trim());
 
   return {
     name: "claude",
     command: "claude",
-    envAllowlist: CLAUDE_ENV_ALLOWLIST,
+    envAllowlist: gatewayMode ? BASE_ENV_ALLOWLIST : CLAUDE_ENV_ALLOWLIST,
     sourceEnv: env,
+    extraEnv(opts): NodeJS.ProcessEnv {
+      if (!gatewayMode) return {};
+      if (!opts.gateway) throw new Error("Claude gateway review requires an attempt grant");
+      return {
+        ANTHROPIC_BASE_URL: opts.gateway.baseUrl,
+        ANTHROPIC_AUTH_TOKEN: opts.gateway.token,
+      };
+    },
 
     validateConfig(e: NodeJS.ProcessEnv): void {
+      if (e.MODEL_GATEWAY_SOCKET_PATH?.trim() && (e.CLAUDE_CODE_OAUTH_TOKEN?.trim() || e.ANTHROPIC_API_KEY?.trim())) {
+        throw new Error("Gateway review service must not receive reusable Claude credentials");
+      }
+      if (e.MODEL_GATEWAY_SOCKET_PATH?.trim()) return;
       // Auth must flow through CLAUDE_CODE_OAUTH_TOKEN (the subscription). A stray
       // ANTHROPIC_API_KEY would take precedence and silently move usage onto metered
       // API billing, so refuse to start rather than bill the wrong way.
@@ -50,6 +63,8 @@ export function createClaudeCliConfig(env: NodeJS.ProcessEnv): CliProviderConfig
     buildArgs(opts: ReviewRunOpts): string[] {
       const args = [
         "-p",
+        "--safe-mode",
+        "--no-session-persistence",
         "--output-format", "json",
         // Enforce the review contract at the CLI layer: the model delivers its reply
         // through a schema-validated tool call instead of free text, so unescaped
@@ -59,7 +74,7 @@ export function createClaudeCliConfig(env: NodeJS.ProcessEnv): CliProviderConfig
         "--model", model,
       ];
       if (opts.addDir) args.push("--add-dir", opts.addDir);
-      if (opts.deep) args.push("--allowedTools", READ_ONLY_TOOLS.join(","));
+      args.push("--tools", opts.deep ? READ_ONLY_TOOLS.join(",") : "");
       return args;
     },
 

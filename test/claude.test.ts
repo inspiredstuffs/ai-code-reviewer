@@ -1,6 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { runReview, selectProvider, type ReviewProvider } from "../provider.ts";
+import {
+  ReviewTimeoutError,
+  effectiveReviewTimeoutMs,
+  runReview,
+  selectProvider,
+  type ReviewProvider,
+} from "../provider.ts";
 import { createClaudeCliConfig, createClaudeProvider, CLAUDE_ENV_ALLOWLIST } from "../providers/claude.ts";
 import { buildSubprocessEnv } from "../runtime/spawn.ts";
 import { createCliBackedProvider } from "../providers/cli.ts";
@@ -9,11 +15,12 @@ import schema from "../providers/review.schema.json" with { type: "json" };
 test("claude CLI adapter defaults to a single diff-only pass on the default model", () => {
   const args = createClaudeCliConfig({}).buildArgs({});
   assert.deepEqual(args, [
-    "-p", "--output-format", "json", "--json-schema", JSON.stringify(schema),
-    "--max-turns", "1", "--model", "claude-sonnet-4-6",
+    "-p", "--safe-mode", "--no-session-persistence", "--output-format", "json",
+    "--json-schema", JSON.stringify(schema), "--max-turns", "1",
+    "--model", "claude-sonnet-4-6", "--tools", "",
   ]);
   assert.ok(!args.includes("--add-dir"), "no working dir by default");
-  assert.ok(!args.includes("--allowedTools"), "no tool restriction by default");
+  assert.equal(args[args.indexOf("--tools") + 1], "", "diff-only review has no tools");
 });
 
 test("claude CLI adapter enforces the shared review schema as structured output", () => {
@@ -31,7 +38,7 @@ test("claude CLI adapter wires a deep review (dir + read-only tools, turn budget
   const args = createClaudeCliConfig({}).buildArgs({ maxTurns: 8, addDir: "/tmp/clone", deep: true });
   assert.equal(args[args.indexOf("--max-turns") + 1], "8");
   assert.equal(args[args.indexOf("--add-dir") + 1], "/tmp/clone");
-  assert.equal(args[args.indexOf("--allowedTools") + 1], "Read,Grep,Glob");
+  assert.equal(args[args.indexOf("--tools") + 1], "Read,Grep,Glob");
   // Read-only: nothing that could execute or mutate the checked-out PR code.
   assert.ok(!args.join(" ").match(/Bash|Write|Edit/), "deep review tools stay read-only");
 });
@@ -68,6 +75,24 @@ test("the claude subprocess env carries the OAuth token but never the service se
   for (const secret of ["GITHUB_APP_PRIVATE_KEY", "GITHUB_WEBHOOK_SECRET", "ANTHROPIC_API_KEY"]) {
     assert.ok(!(secret in env), `${secret} must not reach the reviewer subprocess`);
   }
+});
+
+test("Claude gateway mode passes only the attempt grant to its subprocess", () => {
+  const source = {
+    PATH: "/usr/bin", MODEL_GATEWAY_SOCKET_PATH: "/tmp/acr.sock",
+    CLAUDE_CODE_OAUTH_TOKEN: "reusable-token", GITHUB_WEBHOOK_SECRET: "secret",
+  };
+  const config = createClaudeCliConfig(source);
+  assert.throws(() => config.validateConfig?.(source), /must not receive reusable Claude credentials/);
+  const attempt = { gateway: {
+    token: "opaque-attempt-token", baseUrl: "http://127.0.0.1:8080/attempts/a/anthropic",
+  } };
+  const subprocessEnv = buildSubprocessEnv(source, config.envAllowlist, config.extraEnv?.(attempt));
+  assert.equal(subprocessEnv.ANTHROPIC_AUTH_TOKEN, attempt.gateway.token);
+  assert.equal(subprocessEnv.ANTHROPIC_BASE_URL, attempt.gateway.baseUrl);
+  assert.equal(subprocessEnv.CLAUDE_CODE_OAUTH_TOKEN, undefined);
+  assert.equal(subprocessEnv.GITHUB_WEBHOOK_SECRET, undefined);
+  assert.throws(() => config.extraEnv?.({}), /requires an attempt grant/);
 });
 
 test("selectProvider returns the Claude provider for 'claude' and by default", () => {
@@ -182,4 +207,172 @@ test("runReview surfaces the error when the retry also fails", async () => {
 
   await assert.rejects(() => runReview(provider, "p"), /boom/);
   assert.equal(attempts, 2, "exactly one retry, not an infinite loop");
+});
+
+test("provider execution defaults to 30 minutes and provider configuration wins", () => {
+  assert.equal(effectiveReviewTimeoutMs("claude", {}), 1_800_000);
+  assert.equal(effectiveReviewTimeoutMs("claude", { REVIEW_TIMEOUT_SECONDS: "90" }), 90_000);
+  assert.equal(
+    effectiveReviewTimeoutMs("claude", {
+      REVIEW_TIMEOUT_SECONDS: "90",
+      CLAUDE_TIMEOUT_SECONDS: "12",
+    }),
+    12_000,
+  );
+  assert.equal(
+    effectiveReviewTimeoutMs("codex", {
+      REVIEW_TIMEOUT_SECONDS: "90",
+      CODEX_TIMEOUT_SECONDS: "600",
+    }),
+    600_000,
+  );
+});
+
+test("provider execution rejects invalid timeout configuration before an attempt", async () => {
+  for (const value of ["0", "-1", "1.5", "abc", String(Number.MAX_SAFE_INTEGER + 1)]) {
+    let attempts = 0;
+    const provider: ReviewProvider = {
+      name: "claude",
+      validateConfig() {},
+      async run() {
+        attempts += 1;
+        return { summary: "unexpected", comments: [] };
+      },
+    };
+
+    await assert.rejects(
+      () => runReview(provider, "p", {}, { env: { REVIEW_TIMEOUT_SECONDS: value } }),
+      /REVIEW_TIMEOUT_SECONDS must be a positive safe integer/,
+    );
+    assert.equal(attempts, 0);
+  }
+});
+
+test("automatic retry receives a fresh signal with only the remaining shared budget", async () => {
+  let now = 10_000;
+  const remaining: number[] = [];
+  const signals: AbortSignal[] = [];
+  let attempts = 0;
+  const provider: ReviewProvider = {
+    name: "claude",
+    validateConfig() {},
+    async run(_prompt, opts) {
+      attempts += 1;
+      assert.ok(opts?.signal);
+      signals.push(opts.signal);
+      if (attempts === 1) {
+        now += 12_000;
+        throw new Error("transient malformed reply");
+      }
+      return { summary: "recovered", comments: [] };
+    },
+  };
+
+  const result = await runReview(provider, "p", {}, {
+    env: { REVIEW_TIMEOUT_SECONDS: "30" },
+    now: () => now,
+    createAttemptSignal(timeoutMs) {
+      remaining.push(timeoutMs);
+      return { signal: new AbortController().signal, dispose() {} };
+    },
+  });
+
+  assert.deepEqual(result, { summary: "recovered", comments: [] });
+  assert.deepEqual(remaining, [30_000, 18_000]);
+  assert.equal(attempts, 2);
+  assert.notEqual(signals[0], signals[1]);
+});
+
+test("a provider timeout is not retried", async () => {
+  let attempts = 0;
+  const provider: ReviewProvider = {
+    name: "claude",
+    validateConfig() {},
+    async run(_prompt, opts) {
+      attempts += 1;
+      assert.equal(opts?.signal?.aborted, true);
+      throw opts?.signal?.reason;
+    },
+  };
+
+  await assert.rejects(
+    () => runReview(provider, "p", {}, {
+      env: { CLAUDE_TIMEOUT_SECONDS: "1" },
+      createAttemptSignal() {
+        return { signal: AbortSignal.abort(new ReviewTimeoutError("claude", 1000)), dispose() {} };
+      },
+    }),
+    /claude review exceeded its 1-second execution budget/,
+  );
+  assert.equal(attempts, 1);
+});
+
+test("an already-cancelled caller does not start a provider attempt", async () => {
+  const caller = new AbortController();
+  caller.abort(new Error("deployment stopping"));
+  let attempts = 0;
+  const provider: ReviewProvider = {
+    name: "claude",
+    validateConfig() {},
+    async run(_prompt, opts) {
+      attempts += 1;
+      assert.equal(opts?.signal?.aborted, true);
+      throw opts?.signal?.reason;
+    },
+  };
+
+  await assert.rejects(() => runReview(provider, "p", { signal: caller.signal }), /deployment stopping/);
+  assert.equal(attempts, 0);
+});
+
+test("caller cancellation cannot slip between the shared pre-check and listener registration", async () => {
+  const caller = new AbortController();
+  const signal = caller.signal as AbortSignal & {
+    addEventListener: AbortSignal["addEventListener"];
+  };
+  const addEventListener = signal.addEventListener.bind(signal);
+  signal.addEventListener = ((...args: Parameters<AbortSignal["addEventListener"]>) => {
+    caller.abort(new Error("cancelled during registration"));
+    return addEventListener(...args);
+  }) as AbortSignal["addEventListener"];
+
+  let attempts = 0;
+  const provider: ReviewProvider = {
+    name: "claude",
+    validateConfig() {},
+    async run(_prompt, opts) {
+      attempts += 1;
+      assert.equal(opts?.signal?.aborted, true);
+      throw opts?.signal?.reason;
+    },
+  };
+
+  await assert.rejects(
+    () => runReview(provider, "p", { signal }),
+    /cancelled during registration/,
+  );
+  assert.equal(attempts, 1);
+});
+
+test("a configured deadline aborts a hanging CLI provider without retrying", async () => {
+  let attempts = 0;
+  const provider = createCliBackedProvider({
+    name: "claude",
+    command: process.execPath,
+    sourceEnv: { PATH: process.env.PATH ?? "" },
+    envAllowlist: ["PATH"],
+    buildArgs() {
+      attempts += 1;
+      return ["-e", "setInterval(() => {}, 1000)"];
+    },
+    parseReply: (stdout) => stdout,
+  });
+
+  const started = Date.now();
+  await assert.rejects(
+    () => runReview(provider, "p", {}, { env: { CLAUDE_TIMEOUT_SECONDS: "1" } }),
+    /claude review exceeded its 1-second execution budget/,
+  );
+  assert.equal(attempts, 1);
+  assert.ok(Date.now() - started < 2_500, "deadline terminates the CLI promptly");
 });
